@@ -156,7 +156,7 @@ class InventoryAddCrashReproTest {
         // Open movements dialog on first item
         composeRule.onAllNodesWithTag("item_history_button")[0].performClick()
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodesWithText("سجل حركات:", substring = true).fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag("item_history_dialog").fetchSemanticsNodes().isNotEmpty()
         }
         // AlertDialog buttons merge their child semantics; inspect the unmerged tree for the stable tag.
         composeRule.onNodeWithTag("close_item_history_button", useUnmergedTree = true).performClick()
