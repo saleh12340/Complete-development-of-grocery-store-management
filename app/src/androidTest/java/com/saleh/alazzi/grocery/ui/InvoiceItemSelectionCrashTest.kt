@@ -70,12 +70,52 @@ class InvoiceItemSelectionCrashTest {
                 updatedAt = 1_000L
             )
         )
+        db.items().insert(
+            ItemEntity(
+                id = "normal-item",
+                name = "سكر اختبار",
+                quantityMilli = 25_000L,
+                purchasePrice = 300L,
+                salePrice = 500L,
+                createdAt = 1_001L,
+                updatedAt = 1_001L
+            )
+        )
         viewModel = GroceryViewModel(db, GroceryRepository(db))
     }
 
     @After
     fun tearDown() {
         db.close()
+    }
+
+    @Test
+    fun selectingRegularItemDoesNotCrashInvoiceScreen() {
+        composeRule.setContent {
+            AlAzziTheme {
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                    GroceryApp(viewModel = viewModel, backupManager = GroceryBackupManager(context, db))
+                }
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("login_username_input").performTextReplacement("admin")
+        composeRule.onNodeWithTag("login_pin_input").performTextReplacement("123456")
+        composeRule.onNodeWithTag("login_button").performClick()
+        composeRule.waitUntil(15_000) {
+            composeRule.onAllNodesWithTag("nav_tab_invoices").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("nav_tab_invoices").performClick()
+        composeRule.onNodeWithTag("hub_new_sale").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("line_item_picker_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("invoice_item_normal-item").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("سكر اختبار", substring = true).fetchSemanticsNode()
+        composeRule.onNodeWithTag("new_sale_screen").fetchSemanticsNode()
     }
 
     @Test
