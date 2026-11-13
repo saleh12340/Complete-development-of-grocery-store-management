@@ -252,7 +252,7 @@ fun InvoiceEntryScreen(
     }
     val exactLineTotal = remember(parsedQtyMilli, derivedUnitPrice) {
         if (parsedQtyMilli != null && derivedUnitPrice != null) {
-            MoneyMath.lineTotal(parsedQtyMilli, derivedUnitPrice)
+            runCatching { MoneyMath.lineTotal(parsedQtyMilli, derivedUnitPrice) }.getOrDefault(0L)
         } else 0L
     }
 
@@ -667,7 +667,7 @@ fun InvoiceEntryScreen(
             onDismissRequest = { showItemPicker = false },
             title = { Text("اختيار صنف") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 420.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
                     OutlinedTextField(
                         value = itemSearchQuery,
                         onValueChange = { itemSearchQuery = it },
@@ -682,7 +682,7 @@ fun InvoiceEntryScreen(
                                 (it.barcode ?: "").contains(itemSearchQuery, ignoreCase = true)
                         }
                     }
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(filteredItems, key = { it.id }) { item ->
                             AlAzziCard(
                                 onClick = {
@@ -723,7 +723,7 @@ fun InvoiceEntryScreen(
             onDismissRequest = { showPartyPicker = false },
             title = { Text(if (isSale) "اختيار العميل" else "اختيار المورد") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 400.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
                     OutlinedTextField(
                         value = partySearch,
                         onValueChange = { partySearch = it },
@@ -731,7 +731,7 @@ fun InvoiceEntryScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (isSale) {
                             val list = customers.filter { !it.isArchived && (partySearch.isBlank() || it.name.contains(partySearch, true) || (it.phone ?: "").contains(partySearch)) }
                             items(list, key = { it.id }) { c ->

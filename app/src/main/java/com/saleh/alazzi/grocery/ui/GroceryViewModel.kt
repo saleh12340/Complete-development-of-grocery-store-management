@@ -399,7 +399,8 @@ class GroceryViewModel(
         salePrice: String,
         lowStockThreshold: String = "0",
         categoryId: String? = null,
-        unitId: String? = null
+        unitId: String? = null,
+        onComplete: (Boolean) -> Unit = {}
     ) {
         viewModelScope.launch {
             runCatching {
@@ -410,12 +411,15 @@ class GroceryViewModel(
                     val cleanBarcode = barcode.trim().ifBlank { null }
                     require(database.items().duplicateCount(cleanName, cleanBarcode) == 0) { "الصنف أو الباركود مسجل مسبقاً" }
                     val now = System.currentTimeMillis()
-                    val quantityMilli = (quantity.toBigDecimalOrNull() ?: error("الكمية غير صحيحة"))
-                        .multiply(BigDecimal("1000")).longValueExact()
-                    val lowMilli = (lowStockThreshold.ifBlank { "0" }.toBigDecimalOrNull() ?: error("حد التنبيه غير صحيح"))
-                        .multiply(BigDecimal("1000")).longValueExact()
-                    val buy = purchasePrice.toLongOrNull() ?: error("سعر الشراء غير صحيح")
-                    val sell = salePrice.toLongOrNull() ?: error("سعر البيع غير صحيح")
+                    val normalizedQty = normalizeDecimalText(quantity).ifBlank { "0" }
+                    val normalizedLow = normalizeDecimalText(lowStockThreshold).ifBlank { "0" }
+                    val normalizedBuy = normalizeWholeText(purchasePrice).ifBlank { "0" }
+                    val normalizedSell = normalizeWholeText(salePrice).ifBlank { "0" }
+
+                    val quantityMilli = parseMilliSafe(normalizedQty, "الكمية غير صحيحة")
+                    val lowMilli = parseMilliSafe(normalizedLow, "حد التنبيه غير صحيح")
+                    val buy = normalizedBuy.toLongOrNull() ?: error("سعر الشراء غير صحيح")
+                    val sell = normalizedSell.toLongOrNull() ?: error("سعر البيع غير صحيح")
                     require(quantityMilli >= 0 && lowMilli >= 0 && buy >= 0 && sell >= 0) { "لا تقبل القيم السالبة" }
                     val itemId = UUID.randomUUID().toString()
                     database.items().insert(
@@ -452,11 +456,14 @@ class GroceryViewModel(
                         )
                     }
                 }
-            }.onSuccess { eventChannel.send("تمت إضافة الصنف وتسجيل رصيده الافتتاحي") }
-                .onFailure {
-                    logError("AddItem", it)
-                    eventChannel.send(messageFor(it, "تعذر إضافة الصنف"))
-                }
+            }.onSuccess {
+                eventChannel.send("تمت إضافة الصنف وتسجيل رصيده الافتتاحي")
+                onComplete(true)
+            }.onFailure {
+                logError("AddItem", it)
+                eventChannel.send(messageFor(it, "تعذر إضافة الصنف"))
+                onComplete(false)
+            }
         }
     }
 
@@ -468,7 +475,8 @@ class GroceryViewModel(
         salePrice: String,
         lowStockThreshold: String,
         categoryId: String? = null,
-        unitId: String? = null
+        unitId: String? = null,
+        onComplete: (Boolean) -> Unit = {}
     ) {
         viewModelScope.launch {
             runCatching {
@@ -477,17 +485,19 @@ class GroceryViewModel(
                 require(cleanName.isNotEmpty()) { "اكتب اسم الصنف" }
                 val cleanBarcode = barcode.trim().ifBlank { null }
                 require(database.items().duplicateCountExcluding(id, cleanName, cleanBarcode) == 0) { "اسم الصنف أو الباركود مستخدم لصنف آخر" }
-                val buy = purchasePrice.toLongOrNull() ?: error("سعر الشراء غير صحيح")
-                val sell = salePrice.toLongOrNull() ?: error("سعر البيع غير صحيح")
-                val lowMilli = (lowStockThreshold.ifBlank { "0" }.toBigDecimalOrNull() ?: error("حد التنبيه غير صحيح"))
-                    .multiply(BigDecimal("1000")).longValueExact()
+                val buy = normalizeWholeText(purchasePrice).ifBlank { "0" }.toLongOrNull() ?: error("سعر الشراء غير صحيح")
+                val sell = normalizeWholeText(salePrice).ifBlank { "0" }.toLongOrNull() ?: error("سعر البيع غير صحيح")
+                val lowMilli = parseMilliSafe(normalizeDecimalText(lowStockThreshold).ifBlank { "0" }, "حد التنبيه غير صحيح")
                 require(buy >= 0 && sell >= 0 && lowMilli >= 0) { "لا تقبل القيم السالبة" }
                 check(database.items().updateDetails(id, cleanName, cleanBarcode, buy, sell, lowMilli, categoryId, unitId, System.currentTimeMillis()) == 1)
-            }.onSuccess { eventChannel.send("تم تحديث بيانات الصنف") }
-                .onFailure {
-                    logError("UpdateItem", it)
-                    eventChannel.send(messageFor(it, "تعذر تحديث الصنف"))
-                }
+            }.onSuccess {
+                eventChannel.send("تم تحديث بيانات الصنف")
+                onComplete(true)
+            }.onFailure {
+                logError("UpdateItem", it)
+                eventChannel.send(messageFor(it, "تعذر تحديث الصنف"))
+                onComplete(false)
+            }
         }
     }
 
@@ -1111,6 +1121,26 @@ class GroceryViewModel(
         val start = calendar.timeInMillis
         calendar.add(Calendar.DAY_OF_YEAR, 1)
         return start to calendar.timeInMillis
+    }
+
+    private fun normalizeWholeText(raw: String): String = raw.map { ch ->
+        when (ch) {
+            in '٠'..'٩' -> ('0'.code + (ch.code - '٠'.code)).toChar()
+            in '۰'..'۹' -> ('0'.code + (ch.code - '۰'.code)).toChar()
+            else -> ch
+        }
+    }.joinToString("").replace(",", "").replace("٬", "").trim()
+
+    private fun normalizeDecimalText(raw: String): String =
+        normalizeWholeText(raw).replace("٫", ".")
+
+    private fun parseMilliSafe(normalized: String, errorMsg: String): Long {
+        val bd = normalized.toBigDecimalOrNull() ?: error(errorMsg)
+        return runCatching {
+            bd.multiply(BigDecimal("1000"))
+                .setScale(0, java.math.RoundingMode.HALF_UP)
+                .longValueExact()
+        }.getOrElse { error(errorMsg) }
     }
 
     private fun messageFor(error: Throwable, fallback: String): String =

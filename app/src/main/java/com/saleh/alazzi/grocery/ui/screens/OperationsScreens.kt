@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -256,43 +257,40 @@ fun TransfersScreen(
             onDismissRequest = { showAddDialog = false },
             title = { Text("تسجيل حوالة مالية") },
             text = {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 400.dp)) {
-                    item {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(selected = direction == "OUT", onClick = { direction = "OUT" }, label = { Text("حوالة صادرة") })
-                            FilterChip(selected = direction == "IN", onClick = { direction = "IN" }, label = { Text("حوالة واردة") })
-                        }
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState())
+                ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = direction == "OUT", onClick = { direction = "OUT" }, label = { Text("حوالة صادرة") })
+                        FilterChip(selected = direction == "IN", onClick = { direction = "IN" }, label = { Text("حوالة واردة") })
                     }
-                    item { OutlinedTextField(value = sender, onValueChange = { sender = it }, label = { Text("اسم المرسل") }, singleLine = true) }
-                    item { OutlinedTextField(value = recipient, onValueChange = { recipient = it }, label = { Text("اسم المستلم") }, singleLine = true) }
-                    item { OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("رقم الهاتف") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), singleLine = true) }
-                    item {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            OutlinedTextField(
-                                value = amount,
-                                onValueChange = { amount = Formatters.filterWholeNumberInput(it) },
-                                label = { Text("المبلغ ($currency)") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
-                            OutlinedTextField(
-                                value = fees,
-                                onValueChange = { fees = Formatters.filterWholeNumberInput(it) },
-                                label = { Text("العمولة") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
+                    OutlinedTextField(value = sender, onValueChange = { sender = it }, label = { Text("اسم المرسل") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = recipient, onValueChange = { recipient = it }, label = { Text("اسم المستلم") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("رقم الهاتف") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = amount,
+                            onValueChange = { amount = Formatters.filterWholeNumberInput(it) },
+                            label = { Text("المبلغ ($currency)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = fees,
+                            onValueChange = { fees = Formatters.filterWholeNumberInput(it) },
+                            label = { Text("العمولة") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
-                    item {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            FilterChip(selected = status == "COMPLETED", onClick = { status = "COMPLETED" }, label = { Text("مكتملة") })
-                            FilterChip(selected = status == "PENDING", onClick = { status = "PENDING" }, label = { Text("قيد الانتظار") })
-                        }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(selected = status == "COMPLETED", onClick = { status = "COMPLETED" }, label = { Text("مكتملة") })
+                        FilterChip(selected = status == "PENDING", onClick = { status = "PENDING" }, label = { Text("قيد الانتظار") })
                     }
-                    item { OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("ملاحظات") }) }
+                    OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("ملاحظات") }, modifier = Modifier.fillMaxWidth())
                 }
             },
             confirmButton = {

@@ -44,10 +44,14 @@ import java.util.Date
 import java.util.Locale
 
 object Formatters {
-    private val yemenLocale = Locale("ar", "YE")
     private val enLocale = Locale.US
 
     fun formatMoney(amount: Long, currency: String = "ريال"): String {
+        val formatted = NumberFormat.getNumberInstance(enLocale).format(amount)
+        return if (currency.isBlank()) formatted else "$formatted $currency"
+    }
+
+    fun formatBigMoney(amount: java.math.BigInteger, currency: String = "ريال"): String {
         val formatted = NumberFormat.getNumberInstance(enLocale).format(amount)
         return if (currency.isBlank()) formatted else "$formatted $currency"
     }
@@ -69,14 +73,30 @@ object Formatters {
         }
     }.joinToString("")
 
+    fun normalizeWholeInput(value: String): String =
+        normalizeDigits(value).replace(",", "").replace("٬", "").trim()
+
+    fun normalizeDecimalInput(value: String): String =
+        normalizeDigits(value).replace(",", "").replace("٬", "").replace("٫", ".").trim()
+
     fun parseWholeAmount(value: String): Long? = runCatching {
-        normalizeDigits(value).replace(",", "").replace("٬", "").trim().toLong()
+        normalizeWholeInput(value).toLong()
     }.getOrNull()?.takeIf { it >= 0 }
 
     fun parseQuantityMilli(value: String): Long? = runCatching {
-        BigDecimal(normalizeDigits(value).replace(",", "").replace("٬", "").replace("٫", ".").trim())
-            .multiply(BigDecimal("1000")).longValueExact()
+        BigDecimal(normalizeDecimalInput(value))
+            .multiply(BigDecimal("1000"))
+            .setScale(0, java.math.RoundingMode.HALF_UP)
+            .longValueExact()
     }.getOrNull()?.takeIf { it > 0 }
+
+    fun parseNonNegativeQuantityMilli(value: String): Long? = runCatching {
+        val cleaned = normalizeDecimalInput(value).ifBlank { "0" }
+        BigDecimal(cleaned)
+            .multiply(BigDecimal("1000"))
+            .setScale(0, java.math.RoundingMode.HALF_UP)
+            .longValueExact()
+    }.getOrNull()?.takeIf { it >= 0 }
 
     fun filterWholeNumberInput(input: String): String =
         input.filter { ch -> ch.isDigit() || ch in "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹,٬" }

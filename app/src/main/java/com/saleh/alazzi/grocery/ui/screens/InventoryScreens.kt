@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.History
@@ -22,11 +23,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.saleh.alazzi.grocery.data.local.entity.CategoryEntity
 import com.saleh.alazzi.grocery.data.local.entity.ItemEntity
 import com.saleh.alazzi.grocery.data.local.entity.UnitEntity
-import com.saleh.alazzi.grocery.domain.money.MoneyMath
 import com.saleh.alazzi.grocery.ui.GroceryViewModel
 import com.saleh.alazzi.grocery.ui.UserRoles
 import com.saleh.alazzi.grocery.ui.components.*
 import com.saleh.alazzi.grocery.ui.theme.LocalAlAzziColors
+import java.math.BigInteger
 import java.util.UUID
 
 private enum class InventoryFilter(val label: String) {
@@ -75,13 +76,27 @@ fun InventoryScreen(
         }
     }
 
+    val thousand = remember { BigInteger.valueOf(1_000L) }
+    val halfThousand = remember { BigInteger.valueOf(500L) }
     val totalCostValue = remember(allItems) {
-        allItems.filter { it.isActive && it.quantityMilli > 0 }
-            .sumOf { MoneyMath.lineTotal(it.quantityMilli, it.purchasePrice) }
+        allItems.filter { it.isActive && it.quantityMilli > 0 && it.purchasePrice >= 0 }
+            .fold(BigInteger.ZERO) { acc, item ->
+                val line = BigInteger.valueOf(item.quantityMilli)
+                    .multiply(BigInteger.valueOf(item.purchasePrice))
+                    .add(halfThousand)
+                    .divide(thousand)
+                acc.add(line)
+            }
     }
     val totalSaleValue = remember(allItems) {
-        allItems.filter { it.isActive && it.quantityMilli > 0 }
-            .sumOf { MoneyMath.lineTotal(it.quantityMilli, it.salePrice) }
+        allItems.filter { it.isActive && it.quantityMilli > 0 && it.salePrice >= 0 }
+            .fold(BigInteger.ZERO) { acc, item ->
+                val line = BigInteger.valueOf(item.quantityMilli)
+                    .multiply(BigInteger.valueOf(item.salePrice))
+                    .add(halfThousand)
+                    .divide(thousand)
+                acc.add(line)
+            }
     }
 
     Column(
@@ -100,8 +115,8 @@ fun InventoryScreen(
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            MetricTile("قيمة المخزون بالتكلفة", Formatters.formatMoney(totalCostValue, currency), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
-            MetricTile("القيمة البيعية التقديرية", Formatters.formatMoney(totalSaleValue, currency), colors.paidGreen, Modifier.weight(1f))
+            MetricTile("قيمة المخزون بالتكلفة", Formatters.formatBigMoney(totalCostValue, currency), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+            MetricTile("القيمة البيعية التقديرية", Formatters.formatBigMoney(totalSaleValue, currency), colors.paidGreen, Modifier.weight(1f))
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -198,9 +213,11 @@ fun InventoryScreen(
             units = units,
             isEdit = false,
             onDismiss = { showAddDialog = false },
-            onSave = { name, barcode, qty, buy, sell, low, catId, unitId ->
-                viewModel.addItem(name, barcode, qty, buy, sell, low, catId, unitId)
-                showAddDialog = false
+            onSave = { name, barcode, qty, buy, sell, low, catId, unitId, done ->
+                viewModel.addItem(name, barcode, qty, buy, sell, low, catId, unitId) { ok ->
+                    done(ok)
+                    if (ok) showAddDialog = false
+                }
             }
         )
     }
@@ -213,9 +230,11 @@ fun InventoryScreen(
             isEdit = true,
             initial = item,
             onDismiss = { editItem = null },
-            onSave = { name, barcode, _, buy, sell, low, catId, unitId ->
-                viewModel.updateItem(item.id, name, barcode, buy, sell, low, catId, unitId)
-                editItem = null
+            onSave = { name, barcode, _, buy, sell, low, catId, unitId, done ->
+                viewModel.updateItem(item.id, name, barcode, buy, sell, low, catId, unitId) { ok ->
+                    done(ok)
+                    if (ok) editItem = null
+                }
             }
         )
     }
@@ -260,28 +279,30 @@ fun InventoryScreen(
             onDismissRequest = { historyItem = null },
             title = { Text("سجل حركات: ${item.name}") },
             text = {
-                if (movements.isEmpty()) {
-                    Text("لا توجد حركات مسجلة لهذا الصنف")
-                } else {
-                    LazyColumn(modifier = Modifier.heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(movements, key = { it.id }) { m ->
-                            AlAzziCard(modifier = Modifier.fillMaxWidth()) {
-                                Column(modifier = Modifier.padding(8.dp)) {
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text(m.movementType, fontWeight = FontWeight.Bold)
+                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                    if (movements.isEmpty()) {
+                        Text("لا توجد حركات مسجلة لهذا الصنف")
+                    } else {
+                        LazyColumn(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            items(movements, key = { it.id }) { m ->
+                                AlAzziCard(modifier = Modifier.fillMaxWidth()) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text(m.movementType, fontWeight = FontWeight.Bold)
+                                            Text(
+                                                if (m.quantityInMilli > 0) "+${Formatters.formatQty(m.quantityInMilli)}"
+                                                else "-${Formatters.formatQty(m.quantityOutMilli)}",
+                                                color = if (m.quantityInMilli > 0) colors.paidGreen else colors.debtRed,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                        m.note?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                                         Text(
-                                            if (m.quantityInMilli > 0) "+${Formatters.formatQty(m.quantityInMilli)}"
-                                            else "-${Formatters.formatQty(m.quantityOutMilli)}",
-                                            color = if (m.quantityInMilli > 0) colors.paidGreen else colors.debtRed,
-                                            fontWeight = FontWeight.Bold
+                                            "الرصيد بعد: ${Formatters.formatQty(m.balanceAfterMilli)} • ${Formatters.formatDateTime(m.createdAt)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                    m.note?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                                    Text(
-                                        "الرصيد بعد: ${Formatters.formatQty(m.balanceAfterMilli)} • ${Formatters.formatDateTime(m.createdAt)}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
                                 }
                             }
                         }
@@ -299,8 +320,11 @@ fun InventoryScreen(
             onDismissRequest = { showRefsDialog = false },
             title = { Text("التصنيفات والوحدات") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(value = catName, onValueChange = { catName = it }, label = { Text("تصنيف جديد") }, singleLine = true, modifier = Modifier.weight(1f))
                         Button(enabled = catName.isNotBlank(), onClick = { viewModel.addCategory(catName); catName = "" }) { Text("إضافة") }
                     }
@@ -308,7 +332,7 @@ fun InventoryScreen(
                         Text("التصنيفات: ${categories.joinToString("، ") { it.name }}", style = MaterialTheme.typography.bodySmall)
                     }
                     HorizontalDivider()
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(value = unitName, onValueChange = { unitName = it }, label = { Text("وحدة جديدة (كرتون/حبة/كيلو)") }, singleLine = true, modifier = Modifier.weight(1f))
                         Button(enabled = unitName.isNotBlank(), onClick = { viewModel.addUnit(unitName); unitName = "" }) { Text("إضافة") }
                     }
@@ -330,7 +354,7 @@ private fun ItemFormDialog(
     isEdit: Boolean,
     initial: ItemEntity? = null,
     onDismiss: () -> Unit,
-    onSave: (String, String, String, String, String, String, String?, String?) -> Unit
+    onSave: (String, String, String, String, String, String, String?, String?, (Boolean) -> Unit) -> Unit
 ) {
     var name by remember { mutableStateOf(initial?.name.orEmpty()) }
     var barcode by remember { mutableStateOf(initial?.barcode.orEmpty()) }
@@ -340,70 +364,109 @@ private fun ItemFormDialog(
     var low by remember { mutableStateOf(initial?.let { Formatters.formatQty(it.lowStockThresholdMilli) } ?: "5") }
     var catId by remember { mutableStateOf(initial?.categoryId) }
     var unitId by remember { mutableStateOf(initial?.unitId) }
+    var isSaving by remember { mutableStateOf(false) }
+
+    val parsedQtyOk = isEdit || Formatters.parseNonNegativeQuantityMilli(quantity) != null
+    val parsedBuyOk = Formatters.parseWholeAmount(buy.ifBlank { "0" }) != null
+    val parsedSellOk = Formatters.parseWholeAmount(sell.ifBlank { "0" }) != null
+    val parsedLowOk = Formatters.parseNonNegativeQuantityMilli(low) != null
+    val formValid = name.isNotBlank() && parsedQtyOk && parsedBuyOk && parsedSellOk && parsedLowOk
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isSaving) onDismiss() },
         title = { Text(title) },
         text = {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 420.dp)) {
-                item { OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("اسم الصنف") }, singleLine = true) }
-                item { OutlinedTextField(value = barcode, onValueChange = { barcode = it }, label = { Text("الباركود (اختياري)") }, singleLine = true) }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("اسم الصنف") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("item_name_input")
+                )
+                OutlinedTextField(
+                    value = barcode,
+                    onValueChange = { barcode = it },
+                    label = { Text("الباركود (اختياري)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("item_barcode_input")
+                )
                 if (!isEdit) {
-                    item {
-                        OutlinedTextField(
-                            value = quantity,
-                            onValueChange = { quantity = Formatters.filterDecimalInput(it) },
-                            label = { Text("الكمية الافتتاحية") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            singleLine = true
-                        )
-                    }
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedTextField(
-                            value = buy,
-                            onValueChange = { buy = Formatters.filterWholeNumberInput(it) },
-                            label = { Text("سعر الشراء") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedTextField(
-                            value = sell,
-                            onValueChange = { sell = Formatters.filterWholeNumberInput(it) },
-                            label = { Text("سعر البيع") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-                item {
                     OutlinedTextField(
-                        value = low,
-                        onValueChange = { low = Formatters.filterDecimalInput(it) },
-                        label = { Text("حد تنبيه المخزون المنخفض") },
+                        value = quantity,
+                        onValueChange = { quantity = Formatters.filterDecimalInput(it) },
+                        label = { Text("الكمية الافتتاحية") },
+                        isError = !parsedQtyOk,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("item_qty_input")
                     )
                 }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(
+                        value = buy,
+                        onValueChange = { buy = Formatters.filterWholeNumberInput(it) },
+                        label = { Text("سعر الشراء") },
+                        isError = !parsedBuyOk,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).testTag("item_buy_input")
+                    )
+                    OutlinedTextField(
+                        value = sell,
+                        onValueChange = { sell = Formatters.filterWholeNumberInput(it) },
+                        label = { Text("سعر البيع") },
+                        isError = !parsedSellOk,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).testTag("item_sell_input")
+                    )
+                }
+                OutlinedTextField(
+                    value = low,
+                    onValueChange = { low = Formatters.filterDecimalInput(it) },
+                    label = { Text("حد تنبيه المخزون المنخفض") },
+                    isError = !parsedLowOk,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("item_low_input")
+                )
                 if (categories.isNotEmpty()) {
-                    item {
+                    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("التصنيف:", style = MaterialTheme.typography.labelSmall)
-                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
                             categories.forEach { c ->
-                                FilterChip(selected = catId == c.id, onClick = { catId = if (catId == c.id) null else c.id }, label = { Text(c.name) })
+                                FilterChip(
+                                    selected = catId == c.id,
+                                    onClick = { catId = if (catId == c.id) null else c.id },
+                                    label = { Text(c.name) }
+                                )
                             }
                         }
                     }
                 }
                 if (units.isNotEmpty()) {
-                    item {
+                    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("الوحدة:", style = MaterialTheme.typography.labelSmall)
-                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
                             units.forEach { u ->
-                                FilterChip(selected = unitId == u.id, onClick = { unitId = if (unitId == u.id) null else u.id }, label = { Text(u.name) })
+                                FilterChip(
+                                    selected = unitId == u.id,
+                                    onClick = { unitId = if (unitId == u.id) null else u.id },
+                                    label = { Text(u.name) }
+                                )
                             }
                         }
                     }
@@ -412,21 +475,27 @@ private fun ItemFormDialog(
         },
         confirmButton = {
             Button(
-                enabled = name.isNotBlank(),
+                enabled = formValid && !isSaving,
                 onClick = {
+                    isSaving = true
                     onSave(
                         name,
                         barcode,
-                        Formatters.normalizeDigits(quantity),
-                        Formatters.normalizeDigits(buy),
-                        Formatters.normalizeDigits(sell),
-                        Formatters.normalizeDigits(low),
+                        Formatters.normalizeDecimalInput(quantity).ifBlank { "0" },
+                        Formatters.normalizeWholeInput(buy).ifBlank { "0" },
+                        Formatters.normalizeWholeInput(sell).ifBlank { "0" },
+                        Formatters.normalizeDecimalInput(low).ifBlank { "0" },
                         catId,
                         unitId
-                    )
-                }
-            ) { Text("حفظ") }
+                    ) { _ ->
+                        isSaving = false
+                    }
+                },
+                modifier = Modifier.testTag("save_item_button")
+            ) { Text(if (isSaving) "جارٍ الحفظ..." else "حفظ") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
+        dismissButton = {
+            TextButton(enabled = !isSaving, onClick = onDismiss) { Text("إلغاء") }
+        }
     )
 }
