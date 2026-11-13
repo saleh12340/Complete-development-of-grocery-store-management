@@ -36,8 +36,8 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Verify Room v2 schema export
-        run: test -f app/schemas/com.saleh.alazzi.grocery.data.local.GroceryDatabase/2.json
+      - name: Verify Room v3 schema export
+        run: test -f app/schemas/com.saleh.alazzi.grocery.data.local.GroceryDatabase/3.json
 
       - name: Run unit tests
         run: gradle testDebugUnitTest
