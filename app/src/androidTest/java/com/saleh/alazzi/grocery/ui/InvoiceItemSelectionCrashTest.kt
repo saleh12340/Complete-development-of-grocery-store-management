@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -91,7 +92,7 @@ class InvoiceItemSelectionCrashTest {
         composeRule.onNodeWithTag("login_pin_input").performTextReplacement("123456")
         composeRule.onNodeWithTag("login_button").performClick()
         composeRule.waitUntil(15_000) {
-            composeRule.onNodeWithTag("nav_tab_invoices").fetchSemanticsNodeOrNull() != null
+            composeRule.onAllNodesWithTag("nav_tab_invoices").fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithTag("nav_tab_invoices").performClick()
         composeRule.onNodeWithTag("hub_new_sale").performClick()
