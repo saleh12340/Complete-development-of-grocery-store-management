@@ -154,9 +154,11 @@ class InventoryAddCrashReproTest {
         composeRule.waitForIdle()
 
         // Open movements dialog on first item
-        composeRule.onAllNodesWithText("الحركات")[0].performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("إغلاق").performClick()
+        composeRule.onAllNodesWithTag("item_history_button")[0].performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithTag("close_item_history_button").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("close_item_history_button").performClick()
         composeRule.waitForIdle()
 
         // Open adjust stock dialog
