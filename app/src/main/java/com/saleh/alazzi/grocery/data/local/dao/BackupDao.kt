@@ -103,4 +103,16 @@ interface BackupDao {
     @Query("SELECT * FROM cash_reconciliations") suspend fun readCashReconciliations(): List<CashReconciliationEntity>
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertCashReconciliations(rows: List<CashReconciliationEntity>)
     @Query("DELETE FROM cash_reconciliations") suspend fun clearCashReconciliations(): Int
+
+    @Query("SELECT * FROM journal_entries") suspend fun readJournalEntries(): List<JournalEntryEntity>
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertJournalEntries(rows: List<JournalEntryEntity>)
+    @Query("DELETE FROM journal_entries") suspend fun clearJournalEntries(): Int
+
+    @Query("SELECT * FROM journal_entry_lines") suspend fun readJournalEntryLines(): List<JournalEntryLineEntity>
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertJournalEntryLines(rows: List<JournalEntryLineEntity>)
+    @Query("DELETE FROM journal_entry_lines") suspend fun clearJournalEntryLines(): Int
+
+    @Query("SELECT * FROM accounting_periods") suspend fun readAccountingPeriods(): List<AccountingPeriodEntity>
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertAccountingPeriods(rows: List<AccountingPeriodEntity>)
+    @Query("DELETE FROM accounting_periods") suspend fun clearAccountingPeriods(): Int
 }

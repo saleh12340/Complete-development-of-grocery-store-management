@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import com.saleh.alazzi.grocery.data.local.entity.*
 
@@ -116,6 +117,9 @@ interface ItemDao {
 interface SalesInvoiceDao {
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insert(invoice: SalesInvoiceEntity)
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertLines(lines: List<SalesInvoiceItemEntity>)
+    @Update suspend fun update(invoice: SalesInvoiceEntity): Int
+    @Query("DELETE FROM sales_invoice_items WHERE invoiceId=:invoiceId")
+    suspend fun deleteLines(invoiceId: String): Int
     @Query("SELECT * FROM sales_invoices WHERE id=:id LIMIT 1")
     suspend fun findById(id: String): SalesInvoiceEntity?
     @Query("SELECT * FROM sales_invoices WHERE id=:id LIMIT 1")
@@ -152,7 +156,7 @@ interface SalesInvoiceDao {
             (SELECT COUNT(*) FROM sales_invoices WHERE status='POSTED' AND createdAt>=:from AND createdAt<:to) AS salesInvoices,
             (SELECT COALESCE(SUM(total),0) FROM returns WHERE returnType='SALE' AND createdAt>=:from AND createdAt<:to) AS salesReturns,
             (SELECT COALESCE(SUM(total),0) FROM returns WHERE returnType='PURCHASE' AND createdAt>=:from AND createdAt<:to) AS purchaseReturns,
-            (SELECT COALESCE(SUM(amount),0) FROM expenses WHERE createdAt>=:from AND createdAt<:to) AS expenses
+            (SELECT COALESCE(SUM(amount),0) FROM expenses WHERE isReversed=0 AND createdAt>=:from AND createdAt<:to) AS expenses
     """)
     fun observeFinancialSummary(from: Long, to: Long): Flow<FinancialReportSummary>
 
@@ -167,7 +171,7 @@ interface SalesInvoiceDao {
             (SELECT COALESCE(SUM(((si.unitCostSnapshot * si.quantityMilli + 500) / 1000)),0) FROM sales_invoice_items si INNER JOIN sales_invoices s ON s.id=si.invoiceId WHERE s.status='POSTED' AND s.createdAt>=:from AND s.createdAt<:to) AS cogs,
             (SELECT COALESCE(SUM(((si.unitCostSnapshot * ri.quantityMilli + 500) / 1000)),0) FROM return_items ri INNER JOIN returns r ON r.id=ri.returnId INNER JOIN sales_invoice_items si ON si.id=ri.originalInvoiceItemId WHERE r.returnType='SALE' AND r.createdAt>=:from AND r.createdAt<:to) AS returnedCogs,
             (SELECT COUNT(*) FROM sales_invoice_items si INNER JOIN sales_invoices s ON s.id=si.invoiceId WHERE s.status='POSTED' AND s.createdAt>=:from AND s.createdAt<:to AND si.unitCostSnapshot=0) AS missingCostItemsCount,
-            (SELECT COALESCE(SUM(amount),0) FROM expenses WHERE createdAt>=:from AND createdAt<:to) AS expenses,
+            (SELECT COALESCE(SUM(amount),0) FROM expenses WHERE isReversed=0 AND createdAt>=:from AND createdAt<:to) AS expenses,
             (SELECT COALESCE(SUM(amount),0) FROM cash_transactions WHERE direction='IN' AND createdAt>=:from AND createdAt<:to) AS cashIn,
             (SELECT COALESCE(SUM(amount),0) FROM cash_transactions WHERE direction='OUT' AND createdAt>=:from AND createdAt<:to) AS cashOut,
             (SELECT COALESCE(SUM(amount),0) FROM transfers WHERE direction='IN' AND createdAt>=:from AND createdAt<:to) AS transfersIn,
@@ -219,6 +223,9 @@ interface PurchaseInvoiceDao {
     fun observeLines(invoiceId: String): Flow<List<PurchaseInvoiceItemEntity>>
     @Query("SELECT COALESCE(MAX(CAST(invoiceNumber AS INTEGER)), 0) FROM purchase_invoices")
     suspend fun maxInvoiceNumber(): Long
+    @Update suspend fun update(invoice: PurchaseInvoiceEntity): Int
+    @Query("DELETE FROM purchase_invoice_items WHERE invoiceId=:invoiceId")
+    suspend fun deleteLines(invoiceId: String): Int
     @Query("SELECT * FROM purchase_invoices WHERE supplierId=:supplierId ORDER BY createdAt DESC")
     fun observeForSupplier(supplierId: String): Flow<List<PurchaseInvoiceEntity>>
     @Query("SELECT * FROM purchase_invoices WHERE supplierId=:supplierId AND remaining>0 AND status='POSTED' ORDER BY createdAt ASC")
@@ -231,10 +238,15 @@ interface PurchaseInvoiceDao {
 @Dao
 interface InvoicePaymentDao {
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insert(value: InvoicePaymentEntity)
+    @Update suspend fun update(value: InvoicePaymentEntity): Int
+    @Query("SELECT * FROM invoice_payments WHERE id=:id LIMIT 1")
+    suspend fun findById(id: String): InvoicePaymentEntity?
     @Query("SELECT * FROM invoice_payments WHERE operationId=:operationId LIMIT 1")
     suspend fun findByOperationId(operationId: String): InvoicePaymentEntity?
     @Query("SELECT * FROM invoice_payments WHERE invoiceType=:invoiceType AND invoiceId=:invoiceId ORDER BY createdAt DESC")
     fun observeForInvoice(invoiceType: String, invoiceId: String): Flow<List<InvoicePaymentEntity>>
+    @Query("SELECT * FROM invoice_payments WHERE invoiceType=:invoiceType AND invoiceId=:invoiceId ORDER BY createdAt ASC")
+    suspend fun readForInvoiceSync(invoiceType: String, invoiceId: String): List<InvoicePaymentEntity>
     @Query("SELECT * FROM invoice_payments ORDER BY createdAt DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<InvoicePaymentEntity>>
 }
@@ -242,7 +254,13 @@ interface InvoicePaymentDao {
 @Dao
 interface LedgerDao {
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertCustomer(value: CustomerTransactionEntity)
+    @Update suspend fun updateCustomer(value: CustomerTransactionEntity): Int
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertSupplier(value: SupplierTransactionEntity)
+    @Update suspend fun updateSupplier(value: SupplierTransactionEntity): Int
+    @Query("SELECT * FROM customer_transactions WHERE id=:id LIMIT 1")
+    suspend fun findCustomerById(id: String): CustomerTransactionEntity?
+    @Query("SELECT * FROM supplier_transactions WHERE id=:id LIMIT 1")
+    suspend fun findSupplierById(id: String): SupplierTransactionEntity?
     @Query("SELECT * FROM customer_transactions WHERE customerId=:id ORDER BY createdAt DESC")
     fun observeCustomer(id: String): Flow<List<CustomerTransactionEntity>>
     @Query("SELECT * FROM customer_transactions WHERE customerId=:id ORDER BY createdAt ASC")
@@ -255,6 +273,10 @@ interface LedgerDao {
     suspend fun findCustomerOperation(operationId: String): CustomerTransactionEntity?
     @Query("SELECT * FROM supplier_transactions WHERE operationId=:operationId LIMIT 1")
     suspend fun findSupplierOperation(operationId: String): SupplierTransactionEntity?
+    @Query("SELECT * FROM customer_transactions WHERE sourceType=:sourceType AND sourceId=:sourceId LIMIT 1")
+    suspend fun findCustomerBySource(sourceType: String, sourceId: String): CustomerTransactionEntity?
+    @Query("SELECT * FROM supplier_transactions WHERE sourceType=:sourceType AND sourceId=:sourceId LIMIT 1")
+    suspend fun findSupplierBySource(sourceType: String, sourceId: String): SupplierTransactionEntity?
 }
 
 @Dao
@@ -286,6 +308,15 @@ interface CashDao {
     @Query("SELECT * FROM cash_transactions WHERE idempotencyKey=:key LIMIT 1")
     suspend fun findByIdempotencyKey(key: String): CashTransactionEntity?
 
+    @Query("SELECT * FROM cash_transactions WHERE id=:id LIMIT 1")
+    suspend fun findById(id: String): CashTransactionEntity?
+    @Query("SELECT * FROM cash_transactions WHERE sourceType=:sourceType AND sourceId=:sourceId LIMIT 1")
+    suspend fun findBySource(sourceType: String, sourceId: String): CashTransactionEntity?
+    @Query("UPDATE cash_transactions SET amount=:amount, direction=:direction, note=:note WHERE id=:id")
+    suspend fun updateEntry(id: String, direction: String, amount: Long, note: String?): Int
+    @Query("DELETE FROM cash_transactions WHERE id=:id")
+    suspend fun deleteById(id: String): Int
+
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertReconciliation(value: CashReconciliationEntity)
     @Query("SELECT * FROM cash_reconciliations WHERE operationId=:operationId LIMIT 1")
     suspend fun findReconciliationByOperationId(operationId: String): CashReconciliationEntity?
@@ -303,6 +334,10 @@ interface ReturnDao {
     suspend fun returnedQuantity(invoiceId: String, invoiceItemId: String): Long
     @Query("SELECT COALESCE(SUM(ri.amount),0) FROM return_items ri INNER JOIN returns r ON r.id=ri.returnId WHERE r.originalInvoiceId=:invoiceId AND ri.originalInvoiceItemId=:invoiceItemId")
     suspend fun returnedAmount(invoiceId: String, invoiceItemId: String): Long
+    @Query("SELECT COALESCE(SUM(total),0) FROM returns WHERE originalInvoiceId=:invoiceId")
+    suspend fun totalReturnedForInvoice(invoiceId: String): Long
+    @Query("SELECT COUNT(*) FROM returns WHERE originalInvoiceId=:invoiceId")
+    suspend fun countForInvoice(invoiceId: String): Int
     @Query("SELECT * FROM returns WHERE originalInvoiceId=:invoiceId ORDER BY createdAt DESC")
     fun observeForInvoice(invoiceId: String): Flow<List<ReturnEntity>>
     @Query("SELECT * FROM returns ORDER BY createdAt DESC LIMIT :limit")
@@ -318,6 +353,7 @@ interface ReturnDao {
 @Dao
 interface ExpenseDao {
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insert(value: ExpenseEntity)
+    @Update suspend fun updateEntity(value: ExpenseEntity): Int
     @Query("SELECT * FROM expenses WHERE operationId=:operationId LIMIT 1")
     suspend fun findByOperationId(operationId: String): ExpenseEntity?
     @Query("SELECT * FROM expenses WHERE id=:id LIMIT 1")
@@ -327,13 +363,14 @@ interface ExpenseDao {
     @Query("SELECT * FROM expenses ORDER BY createdAt DESC")
     fun observeAll(): Flow<List<ExpenseEntity>>
 
-    @Query("SELECT COALESCE(SUM(amount),0) FROM expenses WHERE createdAt>=:from AND createdAt<:to")
+    @Query("SELECT COALESCE(SUM(amount),0) FROM expenses WHERE isReversed=0 AND createdAt>=:from AND createdAt<:to")
     fun observeTotal(from: Long, to: Long): Flow<Long>
 }
 
 @Dao
 interface TransferDao {
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insert(value: TransferEntity)
+    @Update suspend fun updateEntity(value: TransferEntity): Int
     @Query("SELECT * FROM transfers WHERE operationId=:operationId LIMIT 1")
     suspend fun findByOperationId(operationId: String): TransferEntity?
     @Query("SELECT * FROM transfers WHERE id=:id LIMIT 1")
@@ -357,6 +394,8 @@ interface ReferenceDao {
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertActivity(value: ActivityLogEntity)
     @Query("SELECT * FROM activity_logs ORDER BY createdAt DESC LIMIT :limit")
     fun observeActivityLogs(limit: Int): Flow<List<ActivityLogEntity>>
+    @Query("SELECT * FROM activity_logs WHERE entityId=:entityId ORDER BY createdAt DESC")
+    fun observeActivityForEntity(entityId: String): Flow<List<ActivityLogEntity>>
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertUser(value: UserEntity)
     @Query("SELECT * FROM users WHERE username=:username LIMIT 1")
     suspend fun findUser(username: String): UserEntity?
@@ -364,6 +403,8 @@ interface ReferenceDao {
     suspend fun findUserById(id: String): UserEntity?
     @Query("UPDATE users SET role=:role, isActive=:isActive WHERE id=:id")
     suspend fun updateUserAccess(id: String, role: String, isActive: Boolean): Int
+    @Query("UPDATE users SET role=:role, permissions=:permissions, isActive=:isActive WHERE id=:id")
+    suspend fun updateUserAccessAndPermissions(id: String, role: String, permissions: String?, isActive: Boolean): Int
     @Query("SELECT * FROM users ORDER BY createdAt ASC")
     fun observeUsers(): Flow<List<UserEntity>>
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertBackup(value: BackupHistoryEntity)
@@ -387,4 +428,36 @@ interface ReferenceDao {
     fun observeErrorLogs(limit: Int): Flow<List<AppErrorLogEntity>>
     @Query("DELETE FROM app_error_logs")
     suspend fun clearErrorLogs(): Int
+}
+
+@Dao
+interface JournalDao {
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertEntry(entry: JournalEntryEntity)
+    @Update suspend fun updateEntry(entry: JournalEntryEntity): Int
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertLines(lines: List<JournalEntryLineEntity>)
+    @Query("DELETE FROM journal_entry_lines WHERE entryId=:entryId")
+    suspend fun deleteLinesForEntry(entryId: String): Int
+    @Query("SELECT * FROM journal_entries ORDER BY createdAt DESC, CAST(entryNumber AS INTEGER) DESC")
+    fun observeAllEntries(): Flow<List<JournalEntryEntity>>
+    @Query("SELECT * FROM journal_entry_lines ORDER BY id ASC")
+    fun observeAllLines(): Flow<List<JournalEntryLineEntity>>
+    @Query("SELECT * FROM journal_entry_lines WHERE entryId=:entryId")
+    fun observeLinesForEntry(entryId: String): Flow<List<JournalEntryLineEntity>>
+    @Query("SELECT * FROM journal_entry_lines WHERE entryId=:entryId")
+    suspend fun readLinesForEntry(entryId: String): List<JournalEntryLineEntity>
+    @Query("SELECT * FROM journal_entries WHERE id=:id LIMIT 1")
+    suspend fun findById(id: String): JournalEntryEntity?
+    @Query("SELECT * FROM journal_entries WHERE operationId=:operationId LIMIT 1")
+    suspend fun findByOperationId(operationId: String): JournalEntryEntity?
+    @Query("SELECT * FROM journal_entries WHERE sourceType=:sourceType AND sourceId=:sourceId AND status!='REVERSED' ORDER BY createdAt DESC LIMIT 1")
+    suspend fun findLatestBySource(sourceType: String, sourceId: String): JournalEntryEntity?
+    @Query("SELECT COALESCE(MAX(CAST(entryNumber AS INTEGER)), 0) FROM journal_entries")
+    suspend fun maxEntryNumber(): Long
+
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertPeriod(period: AccountingPeriodEntity)
+    @Update suspend fun updatePeriod(period: AccountingPeriodEntity): Int
+    @Query("SELECT * FROM accounting_periods ORDER BY endAt DESC")
+    fun observePeriods(): Flow<List<AccountingPeriodEntity>>
+    @Query("SELECT * FROM accounting_periods WHERE isClosed=1 AND :timestamp>=startAt AND :timestamp<=endAt LIMIT 1")
+    suspend fun findClosedPeriodAt(timestamp: Long): AccountingPeriodEntity?
 }

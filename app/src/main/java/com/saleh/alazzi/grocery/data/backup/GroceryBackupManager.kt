@@ -47,7 +47,10 @@ data class BackupPayload(
     val activityLogs: List<ActivityLogEntity> = emptyList(),
     val backupHistory: List<BackupHistoryEntity> = emptyList(),
     val invoicePayments: List<InvoicePaymentEntity>? = emptyList(),
-    val cashReconciliations: List<CashReconciliationEntity>? = emptyList()
+    val cashReconciliations: List<CashReconciliationEntity>? = emptyList(),
+    val journalEntries: List<JournalEntryEntity>? = emptyList(),
+    val journalEntryLines: List<JournalEntryLineEntity>? = emptyList(),
+    val accountingPeriods: List<AccountingPeriodEntity>? = emptyList()
 )
 
 data class BackupEnvelope(
@@ -85,7 +88,7 @@ class GroceryBackupManager(
     private val database: GroceryDatabase
 ) {
     companion object {
-        const val FORMAT_VERSION = 2
+        const val FORMAT_VERSION = 3
         private const val MIN_SUPPORTED_VERSION = 1
         private const val PBKDF2_ITERATIONS = 310_000
         private const val KEY_BITS = 256
@@ -227,6 +230,21 @@ class GroceryBackupManager(
         if (p.returnItems.any { it.returnId !in returnIds }) {
             warnings += "توجد بنود مرتجعات غير مرتبطة بمرتجع صالح"
         }
+        val entryIds = p.journalEntries.orEmpty().map { it.id }.toSet()
+        val linesByEntry = p.journalEntryLines.orEmpty().groupBy { it.entryId }
+        if (p.journalEntryLines.orEmpty().any { it.entryId !in entryIds }) {
+            warnings += "توجد بنود قيود محاسبية غير مرتبطة بقيد صالح"
+        }
+        for (entry in p.journalEntries.orEmpty()) {
+            val entryLines = linesByEntry[entry.id].orEmpty()
+            if (entryLines.isNotEmpty()) {
+                val debitSum = entryLines.sumOf { it.debit }
+                val creditSum = entryLines.sumOf { it.credit }
+                if (debitSum != creditSum) {
+                    warnings += "القيد رقم ${entry.entryNumber} غير متوازن"
+                }
+            }
+        }
         return warnings
     }
 
@@ -301,12 +319,18 @@ class GroceryBackupManager(
             activityLogs = dao.readActivityLogs(),
             backupHistory = dao.readBackupHistory(),
             invoicePayments = dao.readInvoicePayments(),
-            cashReconciliations = dao.readCashReconciliations()
+            cashReconciliations = dao.readCashReconciliations(),
+            journalEntries = dao.readJournalEntries(),
+            journalEntryLines = dao.readJournalEntryLines(),
+            accountingPeriods = dao.readAccountingPeriods()
         )
     }
 
     private suspend fun clearCurrentData() {
         val dao = database.backup()
+        dao.clearJournalEntryLines()
+        dao.clearJournalEntries()
+        dao.clearAccountingPeriods()
         dao.clearCashReconciliations()
         dao.clearInvoicePayments()
         dao.clearReturnItems()
@@ -359,6 +383,9 @@ class GroceryBackupManager(
         dao.insertBackupHistory(p.backupHistory.orEmpty())
         dao.insertInvoicePayments(p.invoicePayments.orEmpty())
         dao.insertCashReconciliations(p.cashReconciliations.orEmpty())
+        dao.insertJournalEntries(p.journalEntries.orEmpty())
+        dao.insertJournalEntryLines(p.journalEntryLines.orEmpty())
+        dao.insertAccountingPeriods(p.accountingPeriods.orEmpty())
     }
 
     private fun countRecords(p: BackupPayload): Int =
@@ -367,7 +394,8 @@ class GroceryBackupManager(
             p.customerTransactions.size + p.supplierTransactions.size + p.stockMovements.size + p.cashTransactions.size +
             p.expenses.size + p.transfers.size + p.returns.size + p.returnItems.size + p.notes.size +
             p.settings.size + p.users.size + p.activityLogs.size + p.backupHistory.size +
-            (p.invoicePayments?.size ?: 0) + (p.cashReconciliations?.size ?: 0)
+            (p.invoicePayments?.size ?: 0) + (p.cashReconciliations?.size ?: 0) +
+            (p.journalEntries?.size ?: 0) + (p.journalEntryLines?.size ?: 0) + (p.accountingPeriods?.size ?: 0)
 
     private fun sha256(value: String): String =
         MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))

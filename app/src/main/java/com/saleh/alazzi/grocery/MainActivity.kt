@@ -25,9 +25,10 @@ class MainActivity : ComponentActivity() {
 
         val database = GroceryDatabase.getInstance(applicationContext)
         val repository = GroceryRepository(database)
+        val sessionManager = com.saleh.alazzi.grocery.security.SessionManager(applicationContext)
         val viewModel = ViewModelProvider(
             this,
-            GroceryViewModel.Factory(database, repository)
+            GroceryViewModel.Factory(database, repository, sessionManager)
         )[GroceryViewModel::class.java]
 
         setContent {

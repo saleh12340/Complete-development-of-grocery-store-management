@@ -93,7 +93,12 @@ data class SalesInvoiceEntity(
     val storeNameSnapshot: String? = null,
     val storePhoneSnapshot: String? = null,
     val storeAddressSnapshot: String? = null,
-    val storeFooterSnapshot: String? = null
+    val storeFooterSnapshot: String? = null,
+    val createdByUserId: String? = null,
+    val createdByUserName: String? = null,
+    val updatedByUserId: String? = null,
+    val updatedByUserName: String? = null,
+    val updatedAt: Long? = null
 )
 
 @Entity(
@@ -137,7 +142,12 @@ data class PurchaseInvoiceEntity(
     val storeNameSnapshot: String? = null,
     val storePhoneSnapshot: String? = null,
     val storeAddressSnapshot: String? = null,
-    val storeFooterSnapshot: String? = null
+    val storeFooterSnapshot: String? = null,
+    val createdByUserId: String? = null,
+    val createdByUserName: String? = null,
+    val updatedByUserId: String? = null,
+    val updatedByUserName: String? = null,
+    val updatedAt: Long? = null
 )
 
 @Entity(
@@ -173,7 +183,15 @@ data class CustomerTransactionEntity(
     val sourceType: String,
     val sourceId: String?,
     val note: String? = null,
-    val createdAt: Long
+    val createdAt: Long,
+    val balanceBefore: Long? = null,
+    val createdByUserId: String? = null,
+    val createdByUserName: String? = null,
+    val updatedByUserId: String? = null,
+    val updatedByUserName: String? = null,
+    val updatedAt: Long? = null,
+    @ColumnInfo(defaultValue = "0")
+    val isReversed: Boolean = false
 )
 
 @Entity(
@@ -191,7 +209,15 @@ data class SupplierTransactionEntity(
     val sourceType: String,
     val sourceId: String?,
     val note: String? = null,
-    val createdAt: Long
+    val createdAt: Long,
+    val balanceBefore: Long? = null,
+    val createdByUserId: String? = null,
+    val createdByUserName: String? = null,
+    val updatedByUserId: String? = null,
+    val updatedByUserName: String? = null,
+    val updatedAt: Long? = null,
+    @ColumnInfo(defaultValue = "0")
+    val isReversed: Boolean = false
 )
 
 @Entity(
@@ -227,7 +253,9 @@ data class CashTransactionEntity(
     val sourceId: String?,
     val paymentMethod: String,
     val note: String? = null,
-    val createdAt: Long
+    val createdAt: Long,
+    val createdByUserId: String? = null,
+    val createdByUserName: String? = null
 )
 
 @Entity(tableName = "expenses", indices = [Index("createdAt"), Index("category"), Index(value = ["operationId"], unique = true)])
@@ -239,7 +267,13 @@ data class ExpenseEntity(
     val paymentMethod: String,
     val description: String? = null,
     val createdAt: Long,
-    val updatedAt: Long? = null
+    val updatedAt: Long? = null,
+    val createdByUserId: String? = null,
+    val createdByUserName: String? = null,
+    val updatedByUserId: String? = null,
+    val updatedByUserName: String? = null,
+    @ColumnInfo(defaultValue = "0")
+    val isReversed: Boolean = false
 )
 
 @Entity(tableName = "transfers", indices = [Index(value = ["operationId"], unique = true), Index("createdAt"), Index("phone")])
@@ -255,7 +289,12 @@ data class TransferEntity(
     val status: String,
     val note: String? = null,
     val createdAt: Long,
-    val senderName: String? = null
+    val senderName: String? = null,
+    val updatedAt: Long? = null,
+    val createdByUserId: String? = null,
+    val createdByUserName: String? = null,
+    val updatedByUserId: String? = null,
+    val updatedByUserName: String? = null
 )
 
 @Entity(
@@ -331,7 +370,8 @@ data class UserEntity(
     val pinHash: String,
     val role: String,
     val isActive: Boolean = true,
-    val createdAt: Long
+    val createdAt: Long,
+    val permissions: String? = null
 )
 
 @Entity(tableName = "backup_history", indices = [Index("createdAt")])
@@ -362,7 +402,12 @@ data class InvoicePaymentEntity(
     val amount: Long,
     val paymentMethod: String,
     val note: String? = null,
-    val createdAt: Long
+    val createdAt: Long,
+    val createdByUserId: String? = null,
+    val createdByUserName: String? = null,
+    val updatedByUserId: String? = null,
+    val updatedByUserName: String? = null,
+    val updatedAt: Long? = null
 )
 
 @Entity(
@@ -387,6 +432,67 @@ data class AppErrorLogEntity(
     val message: String,
     val details: String? = null,
     val createdAt: Long
+)
+
+@Entity(
+    tableName = "journal_entries",
+    indices = [
+        Index(value = ["entryNumber"], unique = true),
+        Index(value = ["operationId"], unique = true),
+        Index("createdAt"),
+        Index("entryType"),
+        Index("sourceId")
+    ]
+)
+data class JournalEntryEntity(
+    @PrimaryKey val id: String,
+    val entryNumber: String,
+    val operationId: String,
+    val entryType: String,
+    val debitAccount: String,
+    val creditAccount: String,
+    val amount: Long,
+    val description: String,
+    val sourceType: String,
+    val sourceId: String? = null,
+    val createdByUserId: String? = null,
+    val createdByUserName: String? = null,
+    val updatedByUserId: String? = null,
+    val updatedByUserName: String? = null,
+    val status: String = "POSTED",
+    val reversedEntryId: String? = null,
+    val reversalEntryId: String? = null,
+    val notes: String? = null,
+    val createdAt: Long,
+    val updatedAt: Long? = null
+)
+
+@Entity(
+    tableName = "journal_entry_lines",
+    foreignKeys = [ForeignKey(entity = JournalEntryEntity::class, parentColumns = ["id"], childColumns = ["entryId"], onDelete = ForeignKey.CASCADE)],
+    indices = [Index("entryId"), Index("accountName")]
+)
+data class JournalEntryLineEntity(
+    @PrimaryKey val id: String,
+    val entryId: String,
+    val accountCode: String,
+    val accountName: String,
+    val debit: Long,
+    val credit: Long,
+    val memo: String? = null
+)
+
+@Entity(tableName = "accounting_periods", indices = [Index("startAt"), Index("endAt")])
+data class AccountingPeriodEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val startAt: Long,
+    val endAt: Long,
+    @ColumnInfo(defaultValue = "1")
+    val isClosed: Boolean = true,
+    val closedByUserId: String? = null,
+    val closedByUserName: String? = null,
+    val closedAt: Long? = null
 )
 
 data class FinancialReportSummary(

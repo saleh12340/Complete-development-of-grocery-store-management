@@ -35,9 +35,12 @@ import com.saleh.alazzi.grocery.data.local.entity.*
         BackupHistoryEntity::class,
         InvoicePaymentEntity::class,
         CashReconciliationEntity::class,
-        AppErrorLogEntity::class
+        AppErrorLogEntity::class,
+        JournalEntryEntity::class,
+        JournalEntryLineEntity::class,
+        AccountingPeriodEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class GroceryDatabase : RoomDatabase() {
@@ -55,6 +58,7 @@ abstract class GroceryDatabase : RoomDatabase() {
     abstract fun expenses(): ExpenseDao
     abstract fun transfers(): TransferDao
     abstract fun references(): ReferenceDao
+    abstract fun journal(): JournalDao
 
     companion object {
         @Volatile private var INSTANCE: GroceryDatabase? = null
@@ -139,6 +143,130 @@ abstract class GroceryDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `sales_invoices` ADD COLUMN `createdByUserId` TEXT")
+                db.execSQL("ALTER TABLE `sales_invoices` ADD COLUMN `createdByUserName` TEXT")
+                db.execSQL("ALTER TABLE `sales_invoices` ADD COLUMN `updatedByUserId` TEXT")
+                db.execSQL("ALTER TABLE `sales_invoices` ADD COLUMN `updatedByUserName` TEXT")
+                db.execSQL("ALTER TABLE `sales_invoices` ADD COLUMN `updatedAt` INTEGER")
+
+                db.execSQL("ALTER TABLE `purchase_invoices` ADD COLUMN `createdByUserId` TEXT")
+                db.execSQL("ALTER TABLE `purchase_invoices` ADD COLUMN `createdByUserName` TEXT")
+                db.execSQL("ALTER TABLE `purchase_invoices` ADD COLUMN `updatedByUserId` TEXT")
+                db.execSQL("ALTER TABLE `purchase_invoices` ADD COLUMN `updatedByUserName` TEXT")
+                db.execSQL("ALTER TABLE `purchase_invoices` ADD COLUMN `updatedAt` INTEGER")
+
+                db.execSQL("ALTER TABLE `customer_transactions` ADD COLUMN `balanceBefore` INTEGER")
+                db.execSQL("ALTER TABLE `customer_transactions` ADD COLUMN `createdByUserId` TEXT")
+                db.execSQL("ALTER TABLE `customer_transactions` ADD COLUMN `createdByUserName` TEXT")
+                db.execSQL("ALTER TABLE `customer_transactions` ADD COLUMN `updatedByUserId` TEXT")
+                db.execSQL("ALTER TABLE `customer_transactions` ADD COLUMN `updatedByUserName` TEXT")
+                db.execSQL("ALTER TABLE `customer_transactions` ADD COLUMN `updatedAt` INTEGER")
+                db.execSQL("ALTER TABLE `customer_transactions` ADD COLUMN `isReversed` INTEGER NOT NULL DEFAULT 0")
+
+                db.execSQL("ALTER TABLE `supplier_transactions` ADD COLUMN `balanceBefore` INTEGER")
+                db.execSQL("ALTER TABLE `supplier_transactions` ADD COLUMN `createdByUserId` TEXT")
+                db.execSQL("ALTER TABLE `supplier_transactions` ADD COLUMN `createdByUserName` TEXT")
+                db.execSQL("ALTER TABLE `supplier_transactions` ADD COLUMN `updatedByUserId` TEXT")
+                db.execSQL("ALTER TABLE `supplier_transactions` ADD COLUMN `updatedByUserName` TEXT")
+                db.execSQL("ALTER TABLE `supplier_transactions` ADD COLUMN `updatedAt` INTEGER")
+                db.execSQL("ALTER TABLE `supplier_transactions` ADD COLUMN `isReversed` INTEGER NOT NULL DEFAULT 0")
+
+                db.execSQL("ALTER TABLE `cash_transactions` ADD COLUMN `createdByUserId` TEXT")
+                db.execSQL("ALTER TABLE `cash_transactions` ADD COLUMN `createdByUserName` TEXT")
+
+                db.execSQL("ALTER TABLE `expenses` ADD COLUMN `createdByUserId` TEXT")
+                db.execSQL("ALTER TABLE `expenses` ADD COLUMN `createdByUserName` TEXT")
+                db.execSQL("ALTER TABLE `expenses` ADD COLUMN `updatedByUserId` TEXT")
+                db.execSQL("ALTER TABLE `expenses` ADD COLUMN `updatedByUserName` TEXT")
+                db.execSQL("ALTER TABLE `expenses` ADD COLUMN `isReversed` INTEGER NOT NULL DEFAULT 0")
+
+                db.execSQL("ALTER TABLE `transfers` ADD COLUMN `updatedAt` INTEGER")
+                db.execSQL("ALTER TABLE `transfers` ADD COLUMN `createdByUserId` TEXT")
+                db.execSQL("ALTER TABLE `transfers` ADD COLUMN `createdByUserName` TEXT")
+                db.execSQL("ALTER TABLE `transfers` ADD COLUMN `updatedByUserId` TEXT")
+                db.execSQL("ALTER TABLE `transfers` ADD COLUMN `updatedByUserName` TEXT")
+
+                db.execSQL("ALTER TABLE `users` ADD COLUMN `permissions` TEXT")
+
+                db.execSQL("ALTER TABLE `invoice_payments` ADD COLUMN `createdByUserId` TEXT")
+                db.execSQL("ALTER TABLE `invoice_payments` ADD COLUMN `createdByUserName` TEXT")
+                db.execSQL("ALTER TABLE `invoice_payments` ADD COLUMN `updatedByUserId` TEXT")
+                db.execSQL("ALTER TABLE `invoice_payments` ADD COLUMN `updatedByUserName` TEXT")
+                db.execSQL("ALTER TABLE `invoice_payments` ADD COLUMN `updatedAt` INTEGER")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `journal_entries` (
+                        `id` TEXT NOT NULL,
+                        `entryNumber` TEXT NOT NULL,
+                        `operationId` TEXT NOT NULL,
+                        `entryType` TEXT NOT NULL,
+                        `debitAccount` TEXT NOT NULL,
+                        `creditAccount` TEXT NOT NULL,
+                        `amount` INTEGER NOT NULL,
+                        `description` TEXT NOT NULL,
+                        `sourceType` TEXT NOT NULL,
+                        `sourceId` TEXT,
+                        `createdByUserId` TEXT,
+                        `createdByUserName` TEXT,
+                        `updatedByUserId` TEXT,
+                        `updatedByUserName` TEXT,
+                        `status` TEXT NOT NULL,
+                        `reversedEntryId` TEXT,
+                        `reversalEntryId` TEXT,
+                        `notes` TEXT,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_journal_entries_entryNumber` ON `journal_entries` (`entryNumber`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_journal_entries_operationId` ON `journal_entries` (`operationId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_journal_entries_createdAt` ON `journal_entries` (`createdAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_journal_entries_entryType` ON `journal_entries` (`entryType`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_journal_entries_sourceId` ON `journal_entries` (`sourceId`)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `journal_entry_lines` (
+                        `id` TEXT NOT NULL,
+                        `entryId` TEXT NOT NULL,
+                        `accountCode` TEXT NOT NULL,
+                        `accountName` TEXT NOT NULL,
+                        `debit` INTEGER NOT NULL,
+                        `credit` INTEGER NOT NULL,
+                        `memo` TEXT,
+                        PRIMARY KEY(`id`),
+                        FOREIGN KEY(`entryId`) REFERENCES `journal_entries`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_journal_entry_lines_entryId` ON `journal_entry_lines` (`entryId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_journal_entry_lines_accountName` ON `journal_entry_lines` (`accountName`)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `accounting_periods` (
+                        `id` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `startAt` INTEGER NOT NULL,
+                        `endAt` INTEGER NOT NULL,
+                        `isClosed` INTEGER NOT NULL DEFAULT 1,
+                        `closedByUserId` TEXT,
+                        `closedByUserName` TEXT,
+                        `closedAt` INTEGER,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_accounting_periods_startAt` ON `accounting_periods` (`startAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_accounting_periods_endAt` ON `accounting_periods` (`endAt`)")
+            }
+        }
+
         fun getInstance(context: Context): GroceryDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -147,7 +275,7 @@ abstract class GroceryDatabase : RoomDatabase() {
                     "al_azzi_grocery.db"
                 )
                     // Never discard financial or inventory data during an upgrade.
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

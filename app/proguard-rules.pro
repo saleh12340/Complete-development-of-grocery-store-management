@@ -5,6 +5,7 @@
 -keep class com.saleh.alazzi.grocery.data.backup.BackupInspection { *; }
 -keep class com.saleh.alazzi.grocery.data.backup.BackupResult { *; }
 -keep class com.saleh.alazzi.grocery.data.local.entity.** { *; }
+-keep class com.saleh.alazzi.grocery.security.** { *; }
 
 # Keep Kotlin metadata used by reflection-based serializers.
 -keep class kotlin.Metadata { *; }

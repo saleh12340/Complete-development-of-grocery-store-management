@@ -5,13 +5,19 @@ import androidx.lifecycle.viewModelScope
 import androidx.room.withTransaction
 import com.saleh.alazzi.grocery.data.local.GroceryDatabase
 import com.saleh.alazzi.grocery.data.local.entity.*
+import com.saleh.alazzi.grocery.data.repository.AccountingRepository
 import com.saleh.alazzi.grocery.data.repository.CreateInvoiceInput
+import com.saleh.alazzi.grocery.data.repository.EditInvoiceInput
 import com.saleh.alazzi.grocery.data.repository.GroceryRepository
 import com.saleh.alazzi.grocery.data.repository.IntegrityAuditReport
+import com.saleh.alazzi.grocery.data.repository.JournalLineInput
 import com.saleh.alazzi.grocery.data.repository.ReturnLineInput
 import com.saleh.alazzi.grocery.data.repository.SaveInvoiceResult
 import com.saleh.alazzi.grocery.security.PinCredential
 import com.saleh.alazzi.grocery.security.PinHasher
+import com.saleh.alazzi.grocery.security.SessionManager
+import com.saleh.alazzi.grocery.security.UserPermissions
+import com.saleh.alazzi.grocery.security.hasPermission
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,8 +74,10 @@ data class ReportSummary(
 @OptIn(ExperimentalCoroutinesApi::class)
 class GroceryViewModel(
     private val database: GroceryDatabase,
-    private val repository: GroceryRepository
+    private val repository: GroceryRepository,
+    private val sessionManager: SessionManager? = null
 ) : ViewModel() {
+    private val accounting = AccountingRepository(database)
 
     val customers = database.customers().observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -113,6 +121,39 @@ class GroceryViewModel(
 
     private val _session = MutableStateFlow<UserEntity?>(null)
     val session = _session.asStateFlow()
+
+    private val _restoredRoute = MutableStateFlow("dashboard")
+    val restoredRoute = _restoredRoute.asStateFlow()
+
+    private val _sessionInitialized = MutableStateFlow(sessionManager == null)
+    val sessionInitialized = _sessionInitialized.asStateFlow()
+
+    val journalEntries = database.journal().observeAllEntries()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val journalEntryLines = database.journal().observeAllLines()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val accountingPeriods = database.journal().observePeriods()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    init {
+        if (sessionManager != null) {
+            viewModelScope.launch {
+                runCatching {
+                    val persisted = sessionManager.loadValidSession()
+                    if (persisted != null) {
+                        val user = database.references().findUserById(persisted.userId)
+                        if (user != null && user.isActive) {
+                            _restoredRoute.value = persisted.lastRoute.ifBlank { "dashboard" }
+                            _session.value = user
+                        } else {
+                            sessionManager.clearSession()
+                        }
+                    }
+                }
+                _sessionInitialized.value = true
+            }
+        }
+    }
 
     val cashBalance = database.cash().observeBalance()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
@@ -254,7 +295,16 @@ class GroceryViewModel(
         }
     }
 
-    fun savePrinterSettings(address: String?, printerName: String?, paperWidthDots: Int) {
+    fun savePrinterSettings(
+        address: String?,
+        printerName: String?,
+        paperWidthDots: Int,
+        copies: Int = 1,
+        fontScale: Float = 1.0f,
+        marginPx: Int = 12,
+        showLogo: Boolean = true,
+        showDateTime: Boolean = true
+    ) {
         viewModelScope.launch {
             runCatching {
                 val now = System.currentTimeMillis()
@@ -262,8 +312,13 @@ class GroceryViewModel(
                     database.references().putSetting(AppSettingEntity("printer_address", address.orEmpty(), now))
                     database.references().putSetting(AppSettingEntity("printer_name", printerName.orEmpty(), now))
                     database.references().putSetting(AppSettingEntity("printer_width", paperWidthDots.toString(), now))
+                    database.references().putSetting(AppSettingEntity("print_copies", copies.coerceIn(1, 5).toString(), now))
+                    database.references().putSetting(AppSettingEntity("print_font_scale", fontScale.coerceIn(0.8f, 1.3f).toString(), now))
+                    database.references().putSetting(AppSettingEntity("print_margin", marginPx.coerceIn(4, 32).toString(), now))
+                    database.references().putSetting(AppSettingEntity("print_show_logo", showLogo.toString(), now))
+                    database.references().putSetting(AppSettingEntity("print_show_datetime", showDateTime.toString(), now))
                 }
-            }.onSuccess { eventChannel.send("تم حفظ إعدادات الطابعة") }
+            }.onSuccess { eventChannel.send("تم حفظ إعدادات الطباعة والطابعة") }
                 .onFailure {
                     logError("SavePrinter", it)
                     eventChannel.send(messageFor(it, "تعذر حفظ إعدادات الطابعة"))
@@ -271,10 +326,22 @@ class GroceryViewModel(
         }
     }
 
+    fun saveSessionTimeoutHours(hours: Int) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("تغيير مهلة الجلسة للمدير فقط")
+                val safe = hours.coerceIn(1, 720)
+                database.references().putSetting(AppSettingEntity("session_timeout_hours", safe.toString(), System.currentTimeMillis()))
+                _session.value?.let { sessionManager?.saveSession(it, _restoredRoute.value, safe) }
+            }.onSuccess { eventChannel.send("تم تحديث مهلة بقاء الجلسة ($hours ساعة)") }
+                .onFailure { eventChannel.send(messageFor(it, "تعذر حفظ مهلة الجلسة")) }
+        }
+    }
+
     fun addCustomer(name: String, phone: String, address: String, notes: String) {
         viewModelScope.launch {
             runCatching {
-                requireCashierOrManager("لا تملك صلاحية إضافة عملاء")
+                requirePermission(UserPermissions.CAN_VIEW_CUSTOMERS, "لا تملك صلاحية إضافة عملاء")
                 val cleanName = name.trim()
                 require(cleanName.isNotEmpty()) { "اكتب اسم العميل" }
                 val cleanPhone = phone.trim().ifBlank { null }
@@ -302,7 +369,7 @@ class GroceryViewModel(
     fun updateCustomer(id: String, name: String, phone: String, address: String, notes: String) {
         viewModelScope.launch {
             runCatching {
-                requireCashierOrManager("لا تملك صلاحية تعديل بيانات العملاء")
+                requirePermission(UserPermissions.CAN_VIEW_CUSTOMERS, "لا تملك صلاحية تعديل بيانات العملاء")
                 val cleanName = name.trim()
                 require(cleanName.isNotEmpty()) { "اكتب اسم العميل" }
                 val cleanPhone = phone.trim().ifBlank { null }
@@ -404,7 +471,7 @@ class GroceryViewModel(
     ) {
         viewModelScope.launch {
             runCatching {
-                requireManager("إضافة الأصناف للمدير فقط")
+                requirePermission(UserPermissions.CAN_EDIT_INVENTORY, "لا تملك صلاحية إضافة الأصناف")
                 database.withTransaction {
                     val cleanName = name.trim()
                     require(cleanName.isNotEmpty()) { "اكتب اسم الصنف" }
@@ -480,7 +547,7 @@ class GroceryViewModel(
     ) {
         viewModelScope.launch {
             runCatching {
-                requireManager("تعديل الأصناف للمدير فقط")
+                requirePermission(UserPermissions.CAN_EDIT_INVENTORY, "لا تملك صلاحية تعديل الأصناف")
                 val cleanName = name.trim()
                 require(cleanName.isNotEmpty()) { "اكتب اسم الصنف" }
                 val cleanBarcode = barcode.trim().ifBlank { null }
@@ -545,7 +612,7 @@ class GroceryViewModel(
     ) {
         viewModelScope.launch {
             runCatching {
-                requireCashierOrManager("لا تملك صلاحية إنشاء فواتير البيع")
+                requirePermission(UserPermissions.CAN_SELL, "لا تملك صلاحية إنشاء فواتير البيع")
                 val actor = _session.value ?: error("يجب تسجيل الدخول أولاً")
                 repository.createSale(input.copy(actorId = actor.id, actorName = actor.displayName))
             }.onSuccess {
@@ -563,6 +630,28 @@ class GroceryViewModel(
         }
     }
 
+    fun editSalesInvoice(
+        input: EditInvoiceInput,
+        onFinished: (Boolean) -> Unit = {},
+        onSaved: (SaveInvoiceResult) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                requirePermission(UserPermissions.CAN_EDIT_OPERATIONS, "لا تملك صلاحية تعديل فواتير البيع")
+                val actor = _session.value ?: error("يجب تسجيل الدخول أولاً")
+                accounting.editSalesInvoice(input.copy(actorId = actor.id, actorName = actor.displayName))
+            }.onSuccess {
+                eventChannel.send("تم تحديث فاتورة البيع #${it.invoiceNumber} وإعادة حساب الأرصدة والمخزون")
+                onSaved(it)
+                onFinished(true)
+            }.onFailure {
+                logError("EditSale", it)
+                eventChannel.send(messageFor(it, "تعذر تعديل فاتورة البيع"))
+                onFinished(false)
+            }
+        }
+    }
+
     fun createPurchase(
         input: CreateInvoiceInput,
         onFinished: (Boolean) -> Unit = {},
@@ -570,7 +659,7 @@ class GroceryViewModel(
     ) {
         viewModelScope.launch {
             runCatching {
-                requireManager("فواتير الشراء للمدير فقط")
+                requirePermission(UserPermissions.CAN_BUY, "لا تملك صلاحية إنشاء فواتير الشراء")
                 val actor = _session.value
                 repository.createPurchase(input.copy(actorId = actor?.id, actorName = actor?.displayName))
             }.onSuccess {
@@ -588,10 +677,32 @@ class GroceryViewModel(
         }
     }
 
+    fun editPurchaseInvoice(
+        input: EditInvoiceInput,
+        onFinished: (Boolean) -> Unit = {},
+        onSaved: (SaveInvoiceResult) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                requirePermission(UserPermissions.CAN_EDIT_OPERATIONS, "لا تملك صلاحية تعديل فواتير الشراء")
+                val actor = _session.value ?: error("يجب تسجيل الدخول أولاً")
+                accounting.editPurchaseInvoice(input.copy(actorId = actor.id, actorName = actor.displayName))
+            }.onSuccess {
+                eventChannel.send("تم تحديث فاتورة الشراء #${it.invoiceNumber} وإعادة حساب الأرصدة والمخزون")
+                onSaved(it)
+                onFinished(true)
+            }.onFailure {
+                logError("EditPurchase", it)
+                eventChannel.send(messageFor(it, "تعذر تعديل فاتورة الشراء"))
+                onFinished(false)
+            }
+        }
+    }
+
     fun paySalesInvoice(invoiceId: String, amount: Long, note: String, operationId: String) {
         viewModelScope.launch {
             runCatching {
-                requireCashierOrManager("لا تملك صلاحية تسجيل دفعات الفواتير")
+                requirePermission(UserPermissions.CAN_RECEIVE_PAYMENT, "لا تملك صلاحية تسجيل دفعات الفواتير")
                 val actor = _session.value
                 repository.recordSalesInvoicePayment(
                     operationId = operationId,
@@ -731,7 +842,7 @@ class GroceryViewModel(
     fun receiveCustomerPayment(customerId: String, amount: Long, note: String, operationId: String) {
         viewModelScope.launch {
             runCatching {
-                requireCashierOrManager("لا تملك صلاحية تسجيل القبض")
+                requirePermission(UserPermissions.CAN_RECEIVE_PAYMENT, "لا تملك صلاحية تسجيل القبض")
                 val actor = _session.value
                 repository.receiveCustomerPayment(
                     operationId = operationId,
@@ -937,6 +1048,7 @@ class GroceryViewModel(
                 )
                 database.references().insertUser(user)
                 _session.value = user
+                sessionManager?.saveSession(user, "dashboard", configuredTimeoutHours())
             }.onSuccess { eventChannel.send("تم إعداد حساب المدير") }
                 .onFailure { eventChannel.send(messageFor(it, "تعذر إعداد حساب المدير")) }
         }
@@ -949,6 +1061,8 @@ class GroceryViewModel(
                 PinHasher.verify(pin.toCharArray(), PinCredential(user.pinSalt, user.pinHash))
             if (valid) {
                 _session.value = user
+                _restoredRoute.value = "dashboard"
+                sessionManager?.saveSession(user, "dashboard", configuredTimeoutHours())
                 eventChannel.send("مرحباً ${user.displayName}")
             } else {
                 eventChannel.send("اسم المستخدم أو PIN غير صحيح")
@@ -956,15 +1070,57 @@ class GroceryViewModel(
         }
     }
 
-    fun logout() { _session.value = null }
+    fun switchUser(username: String, pin: String, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val user = database.references().findUser(username.trim())
+            val valid = user != null && user.isActive &&
+                PinHasher.verify(pin.toCharArray(), PinCredential(user.pinSalt, user.pinHash))
+            if (valid) {
+                _session.value = user
+                _restoredRoute.value = "dashboard"
+                sessionManager?.saveSession(user, "dashboard", configuredTimeoutHours())
+                eventChannel.send("تم تبديل الحساب إلى ${user.displayName}")
+                onResult(true)
+            } else {
+                eventChannel.send("بيانات التحقق للحساب الجديد غير صحيحة")
+                onResult(false)
+            }
+        }
+    }
 
-    fun addUser(displayName: String, username: String, pin: String, role: String = UserRoles.CASHIER) {
+    fun verifyCurrentUserPin(pin: String): Boolean {
+        val user = _session.value ?: return false
+        return PinHasher.verify(pin.toCharArray(), PinCredential(user.pinSalt, user.pinHash))
+    }
+
+    fun saveLastRoute(route: String) {
+        if (route.isBlank() || route == "login" || route == "setup" || _session.value == null) return
+        _restoredRoute.value = route
+        viewModelScope.launch {
+            runCatching { sessionManager?.updateLastRoute(route, configuredTimeoutHours()) }
+        }
+    }
+
+    fun logout() {
+        _session.value = null
+        _restoredRoute.value = "dashboard"
+        sessionManager?.clearSession()
+    }
+
+    fun addUser(
+        displayName: String,
+        username: String,
+        pin: String,
+        role: String = UserRoles.CASHIER,
+        permissions: Set<String>? = null
+    ) {
         viewModelScope.launch {
             runCatching {
                 requireManager("هذه الصلاحية للمدير فقط")
                 require(displayName.isNotBlank() && username.isNotBlank()) { "أدخل اسم المستخدم والاسم الظاهر" }
                 require(role in listOf(UserRoles.MANAGER, UserRoles.CASHIER, UserRoles.LIMITED)) { "الدور غير صالح" }
                 val credential = PinHasher.create(pin.toCharArray())
+                val permCsv = permissions?.takeIf { it.isNotEmpty() }?.joinToString(",")
                 val user = UserEntity(
                     id = UUID.randomUUID().toString(),
                     username = username.trim(),
@@ -973,7 +1129,8 @@ class GroceryViewModel(
                     pinHash = credential.hashBase64,
                     role = role,
                     isActive = true,
-                    createdAt = System.currentTimeMillis()
+                    createdAt = System.currentTimeMillis(),
+                    permissions = permCsv
                 )
                 database.references().insertUser(user)
             }.onSuccess { eventChannel.send("تم إنشاء حساب المستخدم") }
@@ -981,14 +1138,18 @@ class GroceryViewModel(
         }
     }
 
-    fun updateUserAccess(userId: String, role: String, isActive: Boolean) {
+    fun updateUserAccess(userId: String, role: String, isActive: Boolean, permissions: Set<String>? = null) {
         viewModelScope.launch {
             runCatching {
                 requireManager("تعديل الصلاحيات للمدير فقط")
                 require(_session.value?.id != userId || (isActive && role == UserRoles.MANAGER)) {
                     "لا يمكنك تعطيل أو خفض صلاحية حسابك الحالي"
                 }
-                check(database.references().updateUserAccess(userId, role, isActive) == 1)
+                val permCsv = permissions?.takeIf { it.isNotEmpty() }?.joinToString(",")
+                check(database.references().updateUserAccessAndPermissions(userId, role, permCsv, isActive) == 1)
+                if (_session.value?.id == userId) {
+                    database.references().findUserById(userId)?.let { _session.value = it }
+                }
             }.onSuccess { eventChannel.send("تم تحديث صلاحية المستخدم") }
                 .onFailure { eventChannel.send(messageFor(it, "تعذر تحديث صلاحية المستخدم")) }
         }
@@ -1056,6 +1217,245 @@ class GroceryViewModel(
     fun itemMovements(itemId: String) = database.stock().observeMovements(itemId)
     fun customerTransactions(customerId: String) = database.ledger().observeCustomer(customerId)
     fun supplierTransactions(supplierId: String) = database.ledger().observeSupplier(supplierId)
+    fun entityAuditLogs(entityId: String) = database.references().observeActivityForEntity(entityId)
+    fun journalLinesForEntry(entryId: String) = database.journal().observeLinesForEntry(entryId)
+
+    fun voidPurchaseInvoice(invoiceId: String, reason: String, operationId: String) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("إلغاء فواتير الشراء للمدير فقط")
+                val actor = _session.value
+                accounting.voidPurchaseInvoice(operationId, invoiceId, reason, actorId = actor?.id, actorName = actor?.displayName)
+            }.onSuccess { eventChannel.send("تم إلغاء فاتورة الشراء وعكس آثارها المالية والمخزنية") }
+                .onFailure {
+                    logError("VoidPurchase", it)
+                    eventChannel.send(messageFor(it, "تعذر إلغاء فاتورة الشراء"))
+                }
+        }
+    }
+
+    fun updateInvoicePayment(paymentId: String, newAmount: Long, newMethod: String, newNote: String?, reason: String) {
+        viewModelScope.launch {
+            runCatching {
+                requirePermission(UserPermissions.CAN_EDIT_OPERATIONS, "لا تملك صلاحية تعديل الدفعات")
+                val actor = _session.value
+                accounting.updateInvoicePayment(
+                    paymentId = paymentId,
+                    newAmount = newAmount,
+                    newMethod = newMethod,
+                    newNote = newNote,
+                    reason = reason,
+                    actorId = actor?.id,
+                    actorName = actor?.displayName
+                )
+            }.onSuccess { eventChannel.send("تم تعديل الدفعة وإعادة احتساب المتبقي والأرصدة") }
+                .onFailure {
+                    logError("UpdateInvoicePayment", it)
+                    eventChannel.send(messageFor(it, "تعذر تعديل الدفعة"))
+                }
+        }
+    }
+
+    fun updateCustomerTransaction(txId: String, newAmount: Long, newNote: String?, reason: String) {
+        viewModelScope.launch {
+            runCatching {
+                requirePermission(UserPermissions.CAN_EDIT_OPERATIONS, "لا تملك صلاحية تعديل السندات")
+                val actor = _session.value
+                accounting.updateCustomerTransaction(txId, newAmount, newNote, reason, actorId = actor?.id, actorName = actor?.displayName)
+            }.onSuccess { eventChannel.send("تم تعديل العملية وإعادة حساب رصيد العميل") }
+                .onFailure {
+                    logError("UpdateCustomerTx", it)
+                    eventChannel.send(messageFor(it, "تعذر تعديل العملية"))
+                }
+        }
+    }
+
+    fun reverseCustomerTransaction(txId: String, reason: String) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("العكس المحاسبي للمدير فقط")
+                val actor = _session.value
+                accounting.reverseCustomerTransaction(txId, reason, actorId = actor?.id, actorName = actor?.displayName)
+            }.onSuccess { eventChannel.send("تم عكس العملية محاسبياً وإعادة حساب الرصيد") }
+                .onFailure {
+                    logError("ReverseCustomerTx", it)
+                    eventChannel.send(messageFor(it, "تعذر عكس العملية"))
+                }
+        }
+    }
+
+    fun updateSupplierTransaction(txId: String, newAmount: Long, newNote: String?, reason: String) {
+        viewModelScope.launch {
+            runCatching {
+                requirePermission(UserPermissions.CAN_EDIT_OPERATIONS, "لا تملك صلاحية تعديل السندات")
+                val actor = _session.value
+                accounting.updateSupplierTransaction(txId, newAmount, newNote, reason, actorId = actor?.id, actorName = actor?.displayName)
+            }.onSuccess { eventChannel.send("تم تعديل العملية وإعادة حساب رصيد المورد") }
+                .onFailure {
+                    logError("UpdateSupplierTx", it)
+                    eventChannel.send(messageFor(it, "تعذر تعديل العملية"))
+                }
+        }
+    }
+
+    fun reverseSupplierTransaction(txId: String, reason: String) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("العكس المحاسبي للمدير فقط")
+                val actor = _session.value
+                accounting.reverseSupplierTransaction(txId, reason, actorId = actor?.id, actorName = actor?.displayName)
+            }.onSuccess { eventChannel.send("تم عكس العملية محاسبياً وإعادة حساب الرصيد") }
+                .onFailure {
+                    logError("ReverseSupplierTx", it)
+                    eventChannel.send(messageFor(it, "تعذر عكس العملية"))
+                }
+        }
+    }
+
+    fun reverseExpense(expenseId: String, reason: String) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("عكس المصروفات للمدير فقط")
+                val actor = _session.value
+                accounting.reverseExpense(expenseId, reason, actorId = actor?.id, actorName = actor?.displayName)
+            }.onSuccess { eventChannel.send("تم عكس المصروف وإعادة أثره للصندوق") }
+                .onFailure {
+                    logError("ReverseExpense", it)
+                    eventChannel.send(messageFor(it, "تعذر عكس المصروف"))
+                }
+        }
+    }
+
+    fun updateTransfer(
+        transferId: String,
+        senderName: String?,
+        recipientName: String,
+        phone: String,
+        direction: String,
+        amount: Long,
+        fees: Long,
+        status: String,
+        note: String?,
+        reason: String
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("تعديل الحوالات للمدير فقط")
+                val actor = _session.value
+                accounting.updateTransfer(
+                    transferId, senderName, recipientName, phone, direction, amount, fees, status, note, reason,
+                    actorId = actor?.id, actorName = actor?.displayName
+                )
+            }.onSuccess { eventChannel.send("تم تحديث الحوالة وتسوية الصندوق") }
+                .onFailure {
+                    logError("UpdateTransfer", it)
+                    eventChannel.send(messageFor(it, "تعذر تعديل الحوالة"))
+                }
+        }
+    }
+
+    fun createManualJournalEntry(
+        entryType: String,
+        description: String,
+        lines: List<JournalLineInput>,
+        notes: String?,
+        operationId: String
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("إنشاء القيود المحاسبية للمدير فقط")
+                val actor = _session.value
+                accounting.createManualJournalEntry(
+                    operationId = operationId,
+                    entryType = entryType,
+                    description = description,
+                    lines = lines,
+                    notes = notes,
+                    actorId = actor?.id,
+                    actorName = actor?.displayName
+                )
+            }.onSuccess { eventChannel.send("تم ترحيل القيد المحاسبي #${it.entryNumber}") }
+                .onFailure {
+                    logError("CreateJournal", it)
+                    eventChannel.send(messageFor(it, "تعذر إنشاء القيد المحاسبي"))
+                }
+        }
+    }
+
+    fun updateJournalEntry(
+        entryId: String,
+        entryType: String,
+        description: String,
+        lines: List<JournalLineInput>,
+        notes: String?,
+        reason: String
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("تعديل القيود المحاسبية للمدير فقط")
+                val actor = _session.value
+                accounting.updateJournalEntry(
+                    entryId = entryId,
+                    entryType = entryType,
+                    description = description,
+                    lines = lines,
+                    notes = notes,
+                    reason = reason,
+                    actorId = actor?.id,
+                    actorName = actor?.displayName
+                )
+            }.onSuccess { eventChannel.send("تم تحديث القيد المحاسبي #${it.entryNumber}") }
+                .onFailure {
+                    logError("UpdateJournal", it)
+                    eventChannel.send(messageFor(it, "تعذر تعديل القيد المحاسبي"))
+                }
+        }
+    }
+
+    fun reverseJournalEntry(entryId: String, reason: String, operationId: String) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("عكس القيود المحاسبية للمدير فقط")
+                val actor = _session.value
+                accounting.reverseJournalEntry(
+                    operationId = operationId,
+                    entryId = entryId,
+                    reason = reason,
+                    actorId = actor?.id,
+                    actorName = actor?.displayName
+                )
+            }.onSuccess { eventChannel.send("تم إنشاء القيد العكسي #${it.entryNumber}") }
+                .onFailure {
+                    logError("ReverseJournal", it)
+                    eventChannel.send(messageFor(it, "تعذر عكس القيد المحاسبي"))
+                }
+        }
+    }
+
+    fun closeAccountingPeriod(name: String, startAt: Long, endAt: Long) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("إغلاق الفترات المحاسبية للمدير فقط")
+                val actor = _session.value
+                accounting.closeAccountingPeriod(name, startAt, endAt, actorId = actor?.id, actorName = actor?.displayName)
+            }.onSuccess { eventChannel.send("تم إغلاق الفترة المحاسبية: ${it.name}") }
+                .onFailure {
+                    logError("ClosePeriod", it)
+                    eventChannel.send(messageFor(it, "تعذر إغلاق الفترة المحاسبية"))
+                }
+        }
+    }
+
+    fun toggleAccountingPeriodClosed(period: AccountingPeriodEntity, closed: Boolean, reason: String) {
+        viewModelScope.launch {
+            runCatching {
+                requireManager("إدارة الفترات المحاسبية للمدير فقط")
+                val actor = _session.value
+                accounting.toggleAccountingPeriodClosed(period, closed, reason, actorId = actor?.id, actorName = actor?.displayName)
+            }.onSuccess { eventChannel.send(if (closed) "تم إغلاق الفترة" else "تمت إعادة فتح الفترة") }
+                .onFailure { eventChannel.send(messageFor(it, "تعذر تحديث حالة الفترة")) }
+        }
+    }
 
     fun clearErrorLogs() {
         viewModelScope.launch {
@@ -1066,13 +1466,17 @@ class GroceryViewModel(
         }
     }
 
+    private fun configuredTimeoutHours(): Int =
+        storeSettings.value.firstOrNull { it.key == "session_timeout_hours" }?.value?.toIntOrNull()
+            ?: SessionManager.DEFAULT_TIMEOUT_HOURS
+
     private fun requireManager(message: String) {
         require(_session.value?.role == UserRoles.MANAGER) { message }
     }
 
-    private fun requireCashierOrManager(message: String) {
-        val role = _session.value?.role
-        require(role == UserRoles.MANAGER || role == UserRoles.CASHIER) { message }
+    private fun requirePermission(permission: String, message: String) {
+        val user = _session.value ?: throw IllegalArgumentException("يجب تسجيل الدخول أولاً")
+        require(user.hasPermission(permission)) { message }
     }
 
     private fun logError(tag: String, error: Throwable) {
@@ -1148,12 +1552,13 @@ class GroceryViewModel(
 
     class Factory(
         private val database: GroceryDatabase,
-        private val repository: GroceryRepository
+        private val repository: GroceryRepository,
+        private val sessionManager: SessionManager? = null
     ) : androidx.lifecycle.ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(GroceryViewModel::class.java))
-            return GroceryViewModel(database, repository) as T
+            return GroceryViewModel(database, repository, sessionManager) as T
         }
     }
 }

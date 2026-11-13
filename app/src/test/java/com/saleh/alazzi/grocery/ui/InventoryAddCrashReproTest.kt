@@ -113,7 +113,7 @@ class InventoryAddCrashReproTest {
         composeRule.onNodeWithText("تصنيف جديد").performTextInput("مشروبات")
         composeRule.onAllNodesWithText("إضافة")[0].performClick()
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            runBlocking { db.references().readCategoriesSync().any { it.name == "مشروبات" } }
+            runBlocking { db.backup().readCategories().any { it.name == "مشروبات" } }
         }
         composeRule.onNodeWithText("إغلاق").performClick()
         composeRule.waitForIdle()

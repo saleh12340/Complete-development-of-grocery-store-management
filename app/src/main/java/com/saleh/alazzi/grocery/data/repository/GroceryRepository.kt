@@ -56,6 +56,7 @@ data class IntegrityAuditReport(
  * Callers must persist the same operationId while retrying the same user action.
  */
 class GroceryRepository(private val database: GroceryDatabase) {
+    private val accounting = AccountingRepository(database)
 
     suspend fun createSale(input: CreateInvoiceInput): SaveInvoiceResult =
         database.withTransaction {
@@ -68,6 +69,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
             invoiceDao.findByOperationId(input.operationId)?.let {
                 return@withTransaction SaveInvoiceResult(it.id, it.invoiceNumber, true)
             }
+            accounting.requirePeriodOpen(input.createdAt)
 
             val prepared = input.lines.map { line ->
                 val item = database.items().findById(line.itemId)
@@ -124,7 +126,9 @@ class GroceryRepository(private val database: GroceryDatabase) {
                     storeNameSnapshot = storeName,
                     storePhoneSnapshot = storePhone,
                     storeAddressSnapshot = storeAddress,
-                    storeFooterSnapshot = storeFooter
+                    storeFooterSnapshot = storeFooter,
+                    createdByUserId = input.actorId,
+                    createdByUserName = input.actorName
                 )
             )
             invoiceDao.insertLines(lineEntities)
@@ -164,10 +168,14 @@ class GroceryRepository(private val database: GroceryDatabase) {
                         sourceType = "SALES_INVOICE",
                         sourceId = invoiceId,
                         note = "فاتورة بيع رقم $invoiceNumber",
-                        createdAt = input.createdAt
+                        createdAt = input.createdAt,
+                        balanceBefore = customer.balance,
+                        createdByUserId = input.actorId,
+                        createdByUserName = input.actorName
                     )
                 )
                 if (input.paid > 0) {
+                    val beforePay = balance
                     balance = MoneyMath.reduceBalance(balance, input.paid)
                     database.ledger().insertCustomer(
                         CustomerTransactionEntity(
@@ -180,7 +188,10 @@ class GroceryRepository(private val database: GroceryDatabase) {
                             sourceType = "SALES_INVOICE_PAYMENT",
                             sourceId = invoiceId,
                             note = "دفعة مع فاتورة $invoiceNumber",
-                            createdAt = input.createdAt
+                            createdAt = input.createdAt,
+                            balanceBefore = beforePay,
+                            createdByUserId = input.actorId,
+                            createdByUserName = input.actorName
                         )
                     )
                 }
@@ -198,7 +209,9 @@ class GroceryRepository(private val database: GroceryDatabase) {
                         amount = input.paid,
                         paymentMethod = input.paymentMethod,
                         note = "دفعة أولى مع الفاتورة #$invoiceNumber",
-                        createdAt = input.createdAt
+                        createdAt = input.createdAt,
+                        createdByUserId = input.actorId,
+                        createdByUserName = input.actorName
                     )
                 )
                 database.cash().insert(
@@ -211,10 +224,29 @@ class GroceryRepository(private val database: GroceryDatabase) {
                         sourceId = invoiceId,
                         paymentMethod = input.paymentMethod,
                         note = "مقبوض فاتورة بيع #$invoiceNumber",
-                        createdAt = input.createdAt
+                        createdAt = input.createdAt,
+                        createdByUserId = input.actorId,
+                        createdByUserName = input.actorName
                     )
                 )
             }
+            val (cashCode, cashName) = ChartAccounts.accountForMethod(input.paymentMethod)
+            accounting.postAutoJournal(
+                operationId = "journal:${input.operationId}",
+                entryType = "SALE",
+                description = "فاتورة بيع رقم $invoiceNumber",
+                sourceType = "SALES_INVOICE",
+                sourceId = invoiceId,
+                lines = buildList {
+                    if (input.paid > 0L) add(JournalLineInput(cashCode, cashName, input.paid, 0L, "مقبوض فاتورة #$invoiceNumber"))
+                    if (remaining > 0L) add(JournalLineInput(ChartAccounts.CODE_RECEIVABLE, ChartAccounts.NAME_RECEIVABLE, remaining, 0L, customer?.name))
+                    add(JournalLineInput(ChartAccounts.CODE_SALES, ChartAccounts.NAME_SALES, 0L, total, "إيراد مبيعات #$invoiceNumber"))
+                },
+                createdAt = input.createdAt,
+                actorId = input.actorId,
+                actorName = input.actorName,
+                notes = input.notes
+            )
             database.references().insertActivity(
                 ActivityLogEntity(
                     id = UUID.randomUUID().toString(),
@@ -242,6 +274,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
             invoiceDao.findByOperationId(input.operationId)?.let {
                 return@withTransaction SaveInvoiceResult(it.id, it.invoiceNumber, true)
             }
+            accounting.requirePeriodOpen(input.createdAt)
 
             val prepared = input.lines.map { line ->
                 val item = database.items().findById(line.itemId)
@@ -295,7 +328,9 @@ class GroceryRepository(private val database: GroceryDatabase) {
                     storeNameSnapshot = storeName,
                     storePhoneSnapshot = storePhone,
                     storeAddressSnapshot = storeAddress,
-                    storeFooterSnapshot = storeFooter
+                    storeFooterSnapshot = storeFooter,
+                    createdByUserId = input.actorId,
+                    createdByUserName = input.actorName
                 )
             )
             invoiceDao.insertLines(lineEntities)
@@ -335,10 +370,14 @@ class GroceryRepository(private val database: GroceryDatabase) {
                         sourceType = "PURCHASE_INVOICE",
                         sourceId = invoiceId,
                         note = "فاتورة شراء رقم $invoiceNumber",
-                        createdAt = input.createdAt
+                        createdAt = input.createdAt,
+                        balanceBefore = supplier.balance,
+                        createdByUserId = input.actorId,
+                        createdByUserName = input.actorName
                     )
                 )
                 if (input.paid > 0) {
+                    val beforePay = balance
                     balance = MoneyMath.reduceBalance(balance, input.paid)
                     database.ledger().insertSupplier(
                         SupplierTransactionEntity(
@@ -351,7 +390,10 @@ class GroceryRepository(private val database: GroceryDatabase) {
                             sourceType = "PURCHASE_INVOICE_PAYMENT",
                             sourceId = invoiceId,
                             note = "دفعة مع فاتورة $invoiceNumber",
-                            createdAt = input.createdAt
+                            createdAt = input.createdAt,
+                            balanceBefore = beforePay,
+                            createdByUserId = input.actorId,
+                            createdByUserName = input.actorName
                         )
                     )
                 }
@@ -369,7 +411,9 @@ class GroceryRepository(private val database: GroceryDatabase) {
                         amount = input.paid,
                         paymentMethod = input.paymentMethod,
                         note = "دفعة أولى مع فاتورة الشراء #$invoiceNumber",
-                        createdAt = input.createdAt
+                        createdAt = input.createdAt,
+                        createdByUserId = input.actorId,
+                        createdByUserName = input.actorName
                     )
                 )
                 database.cash().insert(
@@ -382,10 +426,29 @@ class GroceryRepository(private val database: GroceryDatabase) {
                         sourceId = invoiceId,
                         paymentMethod = input.paymentMethod,
                         note = "مصروف فاتورة شراء #$invoiceNumber",
-                        createdAt = input.createdAt
+                        createdAt = input.createdAt,
+                        createdByUserId = input.actorId,
+                        createdByUserName = input.actorName
                     )
                 )
             }
+            val (cashCode, cashName) = ChartAccounts.accountForMethod(input.paymentMethod)
+            accounting.postAutoJournal(
+                operationId = "journal:${input.operationId}",
+                entryType = "PURCHASE",
+                description = "فاتورة شراء رقم $invoiceNumber",
+                sourceType = "PURCHASE_INVOICE",
+                sourceId = invoiceId,
+                lines = buildList {
+                    add(JournalLineInput(ChartAccounts.CODE_PURCHASES, ChartAccounts.NAME_PURCHASES, total, 0L, "مشتريات #$invoiceNumber"))
+                    if (input.paid > 0L) add(JournalLineInput(cashCode, cashName, 0L, input.paid, "مدفوع فاتورة #$invoiceNumber"))
+                    if (remaining > 0L) add(JournalLineInput(ChartAccounts.CODE_PAYABLE, ChartAccounts.NAME_PAYABLE, 0L, remaining, supplier?.name))
+                },
+                createdAt = input.createdAt,
+                actorId = input.actorId,
+                actorName = input.actorName,
+                notes = input.notes
+            )
             database.references().insertActivity(
                 ActivityLogEntity(
                     id = UUID.randomUUID().toString(),
@@ -415,6 +478,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank() && amount > 0) { "بيانات الدفعة غير صحيحة" }
         if (database.invoicePayments().findByOperationId(operationId) != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val invoice = database.salesInvoices().findById(invoiceId) ?: error("الفاتورة غير موجودة")
         require(invoice.status == "POSTED") { "لا يمكن سداد فاتورة ملغاة" }
         require(amount <= invoice.remaining) { "المبلغ المدفوع يتجاوز المتبقي من الفاتورة (${invoice.remaining})" }
@@ -439,7 +503,10 @@ class GroceryRepository(private val database: GroceryDatabase) {
                     sourceType = "SALES_INVOICE_PAYMENT",
                     sourceId = invoiceId,
                     note = note?.ifBlank { null } ?: "دفعة على فاتورة بيع #${invoice.invoiceNumber}",
-                    createdAt = createdAt
+                    createdAt = createdAt,
+                    balanceBefore = customer.balance,
+                    createdByUserId = actorId,
+                    createdByUserName = actorName
                 )
             )
             check(database.customers().setBalance(customerId, newBalance, createdAt) == 1)
@@ -455,7 +522,9 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 amount = amount,
                 paymentMethod = paymentMethod,
                 note = note?.ifBlank { null } ?: "دفعة إضافية للفاتورة #${invoice.invoiceNumber}",
-                createdAt = createdAt
+                createdAt = createdAt,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
         )
         database.cash().insert(
@@ -468,8 +537,26 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 sourceId = invoiceId,
                 paymentMethod = paymentMethod,
                 note = note?.ifBlank { null } ?: "سداد جزئي فاتورة #${invoice.invoiceNumber}",
-                createdAt = createdAt
+                createdAt = createdAt,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
+        )
+        val (cashCode, cashName) = ChartAccounts.accountForMethod(paymentMethod)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "RECEIPT",
+            description = "دفعة على فاتورة بيع #${invoice.invoiceNumber}",
+            sourceType = "SALES_INVOICE_PAYMENT",
+            sourceId = invoiceId,
+            lines = listOf(
+                JournalLineInput(cashCode, cashName, amount, 0L, note),
+                JournalLineInput(ChartAccounts.CODE_RECEIVABLE, ChartAccounts.NAME_RECEIVABLE, 0L, amount, note)
+            ),
+            createdAt = createdAt,
+            actorId = actorId,
+            actorName = actorName,
+            notes = note
         )
         database.references().insertActivity(
             ActivityLogEntity(
@@ -501,6 +588,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank() && amount > 0) { "بيانات الدفعة غير صحيحة" }
         if (database.invoicePayments().findByOperationId(operationId) != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val invoice = database.purchaseInvoices().findById(invoiceId) ?: error("فاتورة الشراء غير موجودة")
         require(invoice.status == "POSTED") { "لا يمكن سداد فاتورة ملغاة" }
         require(amount <= invoice.remaining) { "المبلغ المدفوع يتجاوز المتبقي من الفاتورة (${invoice.remaining})" }
@@ -525,7 +613,10 @@ class GroceryRepository(private val database: GroceryDatabase) {
                     sourceType = "PURCHASE_INVOICE_PAYMENT",
                     sourceId = invoiceId,
                     note = note?.ifBlank { null } ?: "دفعة على فاتورة شراء #${invoice.invoiceNumber}",
-                    createdAt = createdAt
+                    createdAt = createdAt,
+                    balanceBefore = supplier.balance,
+                    createdByUserId = actorId,
+                    createdByUserName = actorName
                 )
             )
             check(database.suppliers().setBalance(supplierId, newBalance, createdAt) == 1)
@@ -541,7 +632,9 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 amount = amount,
                 paymentMethod = paymentMethod,
                 note = note?.ifBlank { null } ?: "دفعة إضافية لفاتورة الشراء #${invoice.invoiceNumber}",
-                createdAt = createdAt
+                createdAt = createdAt,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
         )
         database.cash().insert(
@@ -554,8 +647,26 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 sourceId = invoiceId,
                 paymentMethod = paymentMethod,
                 note = note?.ifBlank { null } ?: "سداد جزئي فاتورة شراء #${invoice.invoiceNumber}",
-                createdAt = createdAt
+                createdAt = createdAt,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
+        )
+        val (cashCode, cashName) = ChartAccounts.accountForMethod(paymentMethod)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "PAYMENT",
+            description = "دفعة على فاتورة شراء #${invoice.invoiceNumber}",
+            sourceType = "PURCHASE_INVOICE_PAYMENT",
+            sourceId = invoiceId,
+            lines = listOf(
+                JournalLineInput(ChartAccounts.CODE_PAYABLE, ChartAccounts.NAME_PAYABLE, amount, 0L, note),
+                JournalLineInput(cashCode, cashName, 0L, amount, note)
+            ),
+            createdAt = createdAt,
+            actorId = actorId,
+            actorName = actorName,
+            notes = note
         )
         database.references().insertActivity(
             ActivityLogEntity(
@@ -584,6 +695,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank()) { "معرف التسوية مطلوب" }
         if (database.ledger().findCustomerOperation("$operationId:ledger") != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val customer = database.customers().findById(customerId) ?: error("العميل غير موجود")
         val settledAmount = customer.balance
         require(settledAmount > 0) { "رصيد العميل صفر ولا يحتاج إلى تسوية" }
@@ -592,10 +704,23 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 id = UUID.randomUUID().toString(), operationId = "$operationId:ledger",
                 customerId = customerId, type = "SETTLEMENT", amount = settledAmount,
                 balanceAfter = 0L, sourceType = "MANUAL_SETTLEMENT", sourceId = operationId,
-                note = note?.ifBlank { null } ?: "تسوية وتصفير الحساب (الرصيد السابق: $settledAmount)", createdAt = createdAt
+                note = note?.ifBlank { null } ?: "تسوية وتصفير الحساب (الرصيد السابق: $settledAmount)", createdAt = createdAt,
+                balanceBefore = customer.balance, createdByUserId = actorId, createdByUserName = actorName
             )
         )
         check(database.customers().setBalance(customerId, 0L, createdAt) == 1)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "ADJUSTMENT",
+            description = "تسوية رصيد العميل: ${customer.name}",
+            sourceType = "CUSTOMER_SETTLEMENT",
+            sourceId = customerId,
+            lines = listOf(
+                JournalLineInput(ChartAccounts.CODE_EQUITY_ADJ, ChartAccounts.NAME_EQUITY_ADJ, settledAmount, 0L, note),
+                JournalLineInput(ChartAccounts.CODE_RECEIVABLE, ChartAccounts.NAME_RECEIVABLE, 0L, settledAmount, customer.name)
+            ),
+            createdAt = createdAt, actorId = actorId, actorName = actorName, notes = note
+        )
         database.references().insertActivity(
             ActivityLogEntity(
                 id = UUID.randomUUID().toString(),
@@ -623,6 +748,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank()) { "معرف التسوية مطلوب" }
         if (database.ledger().findSupplierOperation("$operationId:ledger") != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val supplier = database.suppliers().findById(supplierId) ?: error("المورد غير موجود")
         val settledAmount = supplier.balance
         require(settledAmount > 0) { "رصيد المورد صفر ولا يحتاج إلى تسوية" }
@@ -631,10 +757,23 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 id = UUID.randomUUID().toString(), operationId = "$operationId:ledger",
                 supplierId = supplierId, type = "SETTLEMENT", amount = settledAmount,
                 balanceAfter = 0L, sourceType = "MANUAL_SETTLEMENT", sourceId = operationId,
-                note = note?.ifBlank { null } ?: "تسوية وتصفير الحساب (الرصيد السابق: $settledAmount)", createdAt = createdAt
+                note = note?.ifBlank { null } ?: "تسوية وتصفير الحساب (الرصيد السابق: $settledAmount)", createdAt = createdAt,
+                balanceBefore = supplier.balance, createdByUserId = actorId, createdByUserName = actorName
             )
         )
         check(database.suppliers().setBalance(supplierId, 0L, createdAt) == 1)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "ADJUSTMENT",
+            description = "تسوية رصيد المورد: ${supplier.name}",
+            sourceType = "SUPPLIER_SETTLEMENT",
+            sourceId = supplierId,
+            lines = listOf(
+                JournalLineInput(ChartAccounts.CODE_PAYABLE, ChartAccounts.NAME_PAYABLE, settledAmount, 0L, supplier.name),
+                JournalLineInput(ChartAccounts.CODE_EQUITY_ADJ, ChartAccounts.NAME_EQUITY_ADJ, 0L, settledAmount, note)
+            ),
+            createdAt = createdAt, actorId = actorId, actorName = actorName, notes = note
+        )
         database.references().insertActivity(
             ActivityLogEntity(
                 id = UUID.randomUUID().toString(),
@@ -663,6 +802,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank() && newBalance >= 0 && reason.isNotBlank()) { "أدخل الرصيد الجديد وسبب التصحيح" }
         if (database.ledger().findCustomerOperation("$operationId:ledger") != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val customer = database.customers().findById(customerId) ?: error("العميل غير موجود")
         val oldBalance = customer.balance
         require(oldBalance != newBalance) { "الرصيد الجديد مطابق للرصيد الحالي" }
@@ -679,10 +819,33 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 sourceType = "BALANCE_CORRECTION",
                 sourceId = operationId,
                 note = "تصحيح رصيد: $reason",
-                createdAt = createdAt
+                createdAt = createdAt,
+                balanceBefore = oldBalance,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
         )
         check(database.customers().setBalance(customerId, newBalance, createdAt) == 1)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "ADJUSTMENT",
+            description = "تصحيح رصيد العميل ${customer.name}: $reason",
+            sourceType = "CUSTOMER_ADJUSTMENT",
+            sourceId = customerId,
+            lines = listOf(
+                JournalLineInput(
+                    if (isIncrease) ChartAccounts.CODE_RECEIVABLE else ChartAccounts.CODE_EQUITY_ADJ,
+                    if (isIncrease) ChartAccounts.NAME_RECEIVABLE else ChartAccounts.NAME_EQUITY_ADJ,
+                    diff, 0L, reason
+                ),
+                JournalLineInput(
+                    if (isIncrease) ChartAccounts.CODE_EQUITY_ADJ else ChartAccounts.CODE_RECEIVABLE,
+                    if (isIncrease) ChartAccounts.NAME_EQUITY_ADJ else ChartAccounts.NAME_RECEIVABLE,
+                    0L, diff, reason
+                )
+            ),
+            createdAt = createdAt, actorId = actorId, actorName = actorName, notes = reason
+        )
         database.references().insertActivity(
             ActivityLogEntity(
                 id = UUID.randomUUID().toString(),
@@ -711,6 +874,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank() && newBalance >= 0 && reason.isNotBlank()) { "أدخل الرصيد الجديد وسبب التصحيح" }
         if (database.ledger().findSupplierOperation("$operationId:ledger") != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val supplier = database.suppliers().findById(supplierId) ?: error("المورد غير موجود")
         val oldBalance = supplier.balance
         require(oldBalance != newBalance) { "الرصيد الجديد مطابق للرصيد الحالي" }
@@ -727,10 +891,33 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 sourceType = "BALANCE_CORRECTION",
                 sourceId = operationId,
                 note = "تصحيح رصيد: $reason",
-                createdAt = createdAt
+                createdAt = createdAt,
+                balanceBefore = oldBalance,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
         )
         check(database.suppliers().setBalance(supplierId, newBalance, createdAt) == 1)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "ADJUSTMENT",
+            description = "تصحيح رصيد المورد ${supplier.name}: $reason",
+            sourceType = "SUPPLIER_ADJUSTMENT",
+            sourceId = supplierId,
+            lines = listOf(
+                JournalLineInput(
+                    if (isIncrease) ChartAccounts.CODE_EQUITY_ADJ else ChartAccounts.CODE_PAYABLE,
+                    if (isIncrease) ChartAccounts.NAME_EQUITY_ADJ else ChartAccounts.NAME_PAYABLE,
+                    diff, 0L, reason
+                ),
+                JournalLineInput(
+                    if (isIncrease) ChartAccounts.CODE_PAYABLE else ChartAccounts.CODE_EQUITY_ADJ,
+                    if (isIncrease) ChartAccounts.NAME_PAYABLE else ChartAccounts.NAME_EQUITY_ADJ,
+                    0L, diff, reason
+                )
+            ),
+            createdAt = createdAt, actorId = actorId, actorName = actorName, notes = reason
+        )
         database.references().insertActivity(
             ActivityLogEntity(
                 id = UUID.randomUUID().toString(),
@@ -759,6 +946,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank() && amount > 0) { "بيانات الدين غير صحيحة" }
         if (database.ledger().findCustomerOperation("$operationId:ledger") != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val customer = database.customers().findById(customerId) ?: error("العميل غير موجود")
         val newBalance = MoneyMath.addBalance(customer.balance, amount)
         database.ledger().insertCustomer(
@@ -766,10 +954,23 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 id = UUID.randomUUID().toString(), operationId = "$operationId:ledger",
                 customerId = customerId, type = "DEBIT", amount = amount,
                 balanceAfter = newBalance, sourceType = "MANUAL_DEBIT", sourceId = operationId,
-                note = note, createdAt = createdAt
+                note = note, createdAt = createdAt,
+                balanceBefore = customer.balance, createdByUserId = actorId, createdByUserName = actorName
             )
         )
         check(database.customers().setBalance(customerId, newBalance, createdAt) == 1)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "DEBIT",
+            description = "إضافة دين للعميل: ${customer.name}",
+            sourceType = "CUSTOMER_DEBIT",
+            sourceId = customerId,
+            lines = listOf(
+                JournalLineInput(ChartAccounts.CODE_RECEIVABLE, ChartAccounts.NAME_RECEIVABLE, amount, 0L, customer.name),
+                JournalLineInput(ChartAccounts.CODE_EQUITY_ADJ, ChartAccounts.NAME_EQUITY_ADJ, 0L, amount, note)
+            ),
+            createdAt = createdAt, actorId = actorId, actorName = actorName, notes = note
+        )
         database.references().insertActivity(
             ActivityLogEntity(
                 id = UUID.randomUUID().toString(),
@@ -798,6 +999,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank() && amount > 0) { "بيانات المستحق غير صحيحة" }
         if (database.ledger().findSupplierOperation("$operationId:ledger") != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val supplier = database.suppliers().findById(supplierId) ?: error("المورد غير موجود")
         val newBalance = MoneyMath.addBalance(supplier.balance, amount)
         database.ledger().insertSupplier(
@@ -805,10 +1007,23 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 id = UUID.randomUUID().toString(), operationId = "$operationId:ledger",
                 supplierId = supplierId, type = "DEBIT", amount = amount,
                 balanceAfter = newBalance, sourceType = "MANUAL_DEBIT", sourceId = operationId,
-                note = note, createdAt = createdAt
+                note = note, createdAt = createdAt,
+                balanceBefore = supplier.balance, createdByUserId = actorId, createdByUserName = actorName
             )
         )
         check(database.suppliers().setBalance(supplierId, newBalance, createdAt) == 1)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "DEBIT",
+            description = "إضافة مستحق للمورد: ${supplier.name}",
+            sourceType = "SUPPLIER_DEBIT",
+            sourceId = supplierId,
+            lines = listOf(
+                JournalLineInput(ChartAccounts.CODE_EQUITY_ADJ, ChartAccounts.NAME_EQUITY_ADJ, amount, 0L, note),
+                JournalLineInput(ChartAccounts.CODE_PAYABLE, ChartAccounts.NAME_PAYABLE, 0L, amount, supplier.name)
+            ),
+            createdAt = createdAt, actorId = actorId, actorName = actorName, notes = note
+        )
         database.references().insertActivity(
             ActivityLogEntity(
                 id = UUID.randomUUID().toString(),
@@ -838,6 +1053,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank() && amount > 0) { "بيانات السداد غير صحيحة" }
         if (database.ledger().findCustomerOperation("$operationId:ledger") != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val customer = database.customers().findById(customerId) ?: error("العميل غير موجود")
         val newBalance = MoneyMath.reduceBalance(customer.balance, amount)
         database.ledger().insertCustomer(
@@ -851,7 +1067,10 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 sourceType = "CUSTOMER_PAYMENT",
                 sourceId = operationId,
                 note = note,
-                createdAt = createdAt
+                createdAt = createdAt,
+                balanceBefore = customer.balance,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
         )
         check(database.customers().setBalance(customerId, newBalance, createdAt) == 1)
@@ -865,8 +1084,26 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 sourceId = customerId,
                 paymentMethod = paymentMethod,
                 note = note?.ifBlank { null } ?: "قبض من العميل: ${customer.name}",
-                createdAt = createdAt
+                createdAt = createdAt,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
+        )
+        val (cashCode, cashName) = ChartAccounts.accountForMethod(paymentMethod)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "RECEIPT",
+            description = "سند قبض من العميل: ${customer.name}",
+            sourceType = "CUSTOMER_PAYMENT",
+            sourceId = customerId,
+            lines = listOf(
+                JournalLineInput(cashCode, cashName, amount, 0L, customer.name),
+                JournalLineInput(ChartAccounts.CODE_RECEIVABLE, ChartAccounts.NAME_RECEIVABLE, 0L, amount, note)
+            ),
+            createdAt = createdAt,
+            actorId = actorId,
+            actorName = actorName,
+            notes = note
         )
         database.references().insertActivity(
             ActivityLogEntity(
@@ -897,6 +1134,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank() && amount > 0) { "بيانات الدفع غير صحيحة" }
         if (database.ledger().findSupplierOperation("$operationId:ledger") != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val supplier = database.suppliers().findById(supplierId) ?: error("المورد غير موجود")
         val newBalance = MoneyMath.reduceBalance(supplier.balance, amount)
         database.ledger().insertSupplier(
@@ -910,7 +1148,10 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 sourceType = "SUPPLIER_PAYMENT",
                 sourceId = operationId,
                 note = note,
-                createdAt = createdAt
+                createdAt = createdAt,
+                balanceBefore = supplier.balance,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
         )
         check(database.suppliers().setBalance(supplierId, newBalance, createdAt) == 1)
@@ -924,8 +1165,26 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 sourceId = supplierId,
                 paymentMethod = paymentMethod,
                 note = note?.ifBlank { null } ?: "دفع للمورد: ${supplier.name}",
-                createdAt = createdAt
+                createdAt = createdAt,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
+        )
+        val (cashCode, cashName) = ChartAccounts.accountForMethod(paymentMethod)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "PAYMENT",
+            description = "سند صرف للمورد: ${supplier.name}",
+            sourceType = "SUPPLIER_PAYMENT",
+            sourceId = supplierId,
+            lines = listOf(
+                JournalLineInput(ChartAccounts.CODE_PAYABLE, ChartAccounts.NAME_PAYABLE, amount, 0L, supplier.name),
+                JournalLineInput(cashCode, cashName, 0L, amount, note)
+            ),
+            createdAt = createdAt,
+            actorId = actorId,
+            actorName = actorName,
+            notes = note
         )
         database.references().insertActivity(
             ActivityLogEntity(
@@ -956,6 +1215,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ) = database.withTransaction {
         require(operationId.isNotBlank() && category.isNotBlank() && amount > 0) { "بيانات المصروف غير صحيحة" }
         if (database.expenses().findByOperationId(operationId) != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val id = UUID.randomUUID().toString()
         database.expenses().insert(
             ExpenseEntity(
@@ -965,7 +1225,9 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 amount = amount,
                 paymentMethod = paymentMethod,
                 description = description,
-                createdAt = createdAt
+                createdAt = createdAt,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
         )
         database.cash().insert(
@@ -978,8 +1240,26 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 sourceId = id,
                 paymentMethod = paymentMethod,
                 note = description?.ifBlank { null } ?: category.trim(),
-                createdAt = createdAt
+                createdAt = createdAt,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
+        )
+        val (cashCode, cashName) = ChartAccounts.accountForMethod(paymentMethod)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "EXPENSE",
+            description = "مصروف (${category.trim()})",
+            sourceType = "EXPENSE",
+            sourceId = id,
+            lines = listOf(
+                JournalLineInput(ChartAccounts.CODE_EXPENSES, ChartAccounts.NAME_EXPENSES, amount, 0L, description),
+                JournalLineInput(cashCode, cashName, 0L, amount, category.trim())
+            ),
+            createdAt = createdAt,
+            actorId = actorId,
+            actorName = actorName,
+            notes = description
         )
         database.references().insertActivity(
             ActivityLogEntity(
@@ -1007,10 +1287,24 @@ class GroceryRepository(private val database: GroceryDatabase) {
         actorId: String? = null,
         actorName: String? = null
     ) = database.withTransaction {
-        require(category.isNotBlank() && newAmount > 0) { "بيانات المصروف غير صحيحة" }
+        require(category.isNotBlank() && newAmount > 0 && reason.isNotBlank()) { "بيانات المصروف وسبب التعديل مطلوبة" }
         val existing = database.expenses().findById(expenseId) ?: error("المصروف غير موجود")
+        require(!existing.isReversed) { "لا يمكن تعديل مصروف معكوس" }
+        accounting.requirePeriodOpen(existing.createdAt)
+        accounting.requirePeriodOpen(now)
         val oldAmount = existing.amount
-        check(database.expenses().update(expenseId, category.trim(), newAmount, description?.trim()?.ifBlank { null }, now) == 1)
+        check(
+            database.expenses().updateEntity(
+                existing.copy(
+                    category = category.trim(),
+                    amount = newAmount,
+                    description = description?.trim()?.ifBlank { null },
+                    updatedAt = now,
+                    updatedByUserId = actorId,
+                    updatedByUserName = actorName
+                )
+            ) == 1
+        )
         val delta = newAmount - oldAmount
         if (delta != 0L) {
             database.cash().insert(
@@ -1023,8 +1317,37 @@ class GroceryRepository(private val database: GroceryDatabase) {
                     sourceId = expenseId,
                     paymentMethod = existing.paymentMethod,
                     note = "تعديل مصروف (${existing.category}): $reason",
-                    createdAt = now
+                    createdAt = now,
+                    createdByUserId = actorId,
+                    createdByUserName = actorName
                 )
+            )
+            val (cashCode, cashName) = ChartAccounts.accountForMethod(existing.paymentMethod)
+            accounting.postAutoJournal(
+                operationId = "journal:exp-edit:$expenseId:$now:${UUID.randomUUID()}",
+                entryType = "ADJUSTMENT",
+                description = "تعديل مصروف (${category.trim()}): $reason",
+                sourceType = "EXPENSE_EDIT",
+                sourceId = expenseId,
+                lines = listOf(
+                    JournalLineInput(
+                        if (delta > 0) ChartAccounts.CODE_EXPENSES else cashCode,
+                        if (delta > 0) ChartAccounts.NAME_EXPENSES else cashName,
+                        abs(delta),
+                        0L,
+                        reason
+                    ),
+                    JournalLineInput(
+                        if (delta > 0) cashCode else ChartAccounts.CODE_EXPENSES,
+                        if (delta > 0) cashName else ChartAccounts.NAME_EXPENSES,
+                        0L,
+                        abs(delta),
+                        reason
+                    )
+                ),
+                createdAt = now,
+                actorId = actorId,
+                actorName = actorName
             )
         }
         database.references().insertActivity(
@@ -1055,13 +1378,16 @@ class GroceryRepository(private val database: GroceryDatabase) {
         status: String,
         note: String? = null,
         createdAt: Long = System.currentTimeMillis(),
-        senderName: String? = null
+        senderName: String? = null,
+        actorId: String? = null,
+        actorName: String? = null
     ) = database.withTransaction {
         require(operationId.isNotBlank() && recipientName.isNotBlank() && amount > 0 && fees >= 0) {
             "بيانات الحوالة غير صحيحة"
         }
         require(direction == "OUT" || direction == "IN") { "اتجاه الحوالة غير صحيح" }
         if (database.transfers().findByOperationId(operationId) != null) return@withTransaction
+        accounting.requirePeriodOpen(createdAt)
         val net = if (direction == "OUT") Math.addExact(amount, fees) else {
             require(fees <= amount) { "الرسوم أكبر من مبلغ الحوالة" }
             Math.subtractExact(amount, fees)
@@ -1080,7 +1406,9 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 status = status,
                 note = note,
                 createdAt = createdAt,
-                senderName = senderName?.trim()?.ifBlank { null }
+                senderName = senderName?.trim()?.ifBlank { null },
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
         )
         database.cash().insert(
@@ -1093,8 +1421,31 @@ class GroceryRepository(private val database: GroceryDatabase) {
                 sourceId = id,
                 paymentMethod = paymentMethod,
                 note = note?.ifBlank { null } ?: "حوالة: ${recipientName.trim()}",
-                createdAt = createdAt
+                createdAt = createdAt,
+                createdByUserId = actorId,
+                createdByUserName = actorName
             )
+        )
+        val (cashCode, cashName) = ChartAccounts.accountForMethod(paymentMethod)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "TRANSFER",
+            description = "حوالة ${if (direction == "IN") "واردة من" else "صادرة إلى"}: ${recipientName.trim()}",
+            sourceType = "TRANSFER",
+            sourceId = id,
+            lines = listOf(
+                JournalLineInput(
+                    if (direction == "IN") cashCode else ChartAccounts.CODE_TRANSFERS,
+                    if (direction == "IN") cashName else ChartAccounts.NAME_TRANSFERS,
+                    net, 0L, recipientName.trim()
+                ),
+                JournalLineInput(
+                    if (direction == "IN") ChartAccounts.CODE_TRANSFERS else cashCode,
+                    if (direction == "IN") ChartAccounts.NAME_TRANSFERS else cashName,
+                    0L, net, recipientName.trim()
+                )
+            ),
+            createdAt = createdAt, actorId = actorId, actorName = actorName, notes = note
         )
     }
 
@@ -1108,6 +1459,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
     ): CashReconciliationEntity = database.withTransaction {
         require(operationId.isNotBlank() && actualCount >= 0 && note.isNotBlank()) { "أدخل الرصيد الفعلي وسبب المطابقة" }
         database.cash().findReconciliationByOperationId(operationId)?.let { return@withTransaction it }
+        accounting.requirePeriodOpen(createdAt)
         val bookBalance = database.cash().readBalanceSync()
         val difference = actualCount - bookBalance
         val rec = CashReconciliationEntity(
@@ -1132,8 +1484,30 @@ class GroceryRepository(private val database: GroceryDatabase) {
                     sourceId = rec.id,
                     paymentMethod = "CASH",
                     note = "تسوية جرد الصندوق: ${note.trim()}",
-                    createdAt = createdAt
+                    createdAt = createdAt,
+                    createdByUserId = actorId,
+                    createdByUserName = actorName
                 )
+            )
+            accounting.postAutoJournal(
+                operationId = "journal:$operationId",
+                entryType = "ADJUSTMENT",
+                description = "تسوية جرد الصندوق: ${note.trim()}",
+                sourceType = "CASH_RECONCILIATION",
+                sourceId = rec.id,
+                lines = listOf(
+                    JournalLineInput(
+                        if (difference > 0) ChartAccounts.CODE_CASH else ChartAccounts.CODE_EQUITY_ADJ,
+                        if (difference > 0) ChartAccounts.NAME_CASH else ChartAccounts.NAME_EQUITY_ADJ,
+                        abs(difference), 0L, note.trim()
+                    ),
+                    JournalLineInput(
+                        if (difference > 0) ChartAccounts.CODE_EQUITY_ADJ else ChartAccounts.CODE_CASH,
+                        if (difference > 0) ChartAccounts.NAME_EQUITY_ADJ else ChartAccounts.NAME_CASH,
+                        0L, abs(difference), note.trim()
+                    )
+                ),
+                createdAt = createdAt, actorId = actorId, actorName = actorName, notes = note.trim()
             )
         }
         database.references().insertActivity(
@@ -1167,6 +1541,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
         database.returns().findByOperationId(operationId)?.let {
             return@withTransaction SaveReturnResult(it.id, it.total, true)
         }
+        accounting.requirePeriodOpen(createdAt)
         val invoice = database.salesInvoices().findById(invoiceId) ?: error("فاتورة البيع غير موجودة")
         require(invoice.status == "POSTED") { "لا يمكن إرجاع فاتورة ملغاة" }
         val originalLines = database.salesInvoices().lines(invoiceId)
@@ -1245,10 +1620,24 @@ class GroceryRepository(private val database: GroceryDatabase) {
             database.cash().insert(
                 CashTransactionEntity(
                     UUID.randomUUID().toString(), "$operationId:cash", "OUT", cashRefund,
-                    "SALE_RETURN", returnId, "CASH", note?.ifBlank { null } ?: "رد نقدي لمرتجع بيع #${invoice.invoiceNumber}", createdAt
+                    "SALE_RETURN", returnId, "CASH", note?.ifBlank { null } ?: "رد نقدي لمرتجع بيع #${invoice.invoiceNumber}", createdAt,
+                    createdByUserId = actorId, createdByUserName = actorName
                 )
             )
         }
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "RETURN",
+            description = "مرتجع بيع على فاتورة #${invoice.invoiceNumber}",
+            sourceType = "SALE_RETURN",
+            sourceId = returnId,
+            lines = buildList {
+                add(JournalLineInput(ChartAccounts.CODE_SALES_RETURNS, ChartAccounts.NAME_SALES_RETURNS, total, 0L, note))
+                if (cashRefund > 0L) add(JournalLineInput(ChartAccounts.CODE_CASH, ChartAccounts.NAME_CASH, 0L, cashRefund, note))
+                if (creditReduction > 0L) add(JournalLineInput(ChartAccounts.CODE_RECEIVABLE, ChartAccounts.NAME_RECEIVABLE, 0L, creditReduction, note))
+            },
+            createdAt = createdAt, actorId = actorId, actorName = actorName, notes = note
+        )
         database.references().insertActivity(
             ActivityLogEntity(
                 id = UUID.randomUUID().toString(),
@@ -1279,6 +1668,7 @@ class GroceryRepository(private val database: GroceryDatabase) {
         database.returns().findByOperationId(operationId)?.let {
             return@withTransaction SaveReturnResult(it.id, it.total, true)
         }
+        accounting.requirePeriodOpen(createdAt)
         val invoice = database.purchaseInvoices().findById(invoiceId) ?: error("فاتورة الشراء غير موجودة")
         require(invoice.status == "POSTED") { "لا يمكن إرجاع فاتورة ملغاة" }
         val originalLines = database.purchaseInvoices().lines(invoiceId)
@@ -1358,10 +1748,24 @@ class GroceryRepository(private val database: GroceryDatabase) {
             database.cash().insert(
                 CashTransactionEntity(
                     UUID.randomUUID().toString(), "$operationId:cash", "IN", cashReceived,
-                    "PURCHASE_RETURN", returnId, "CASH", note?.ifBlank { null } ?: "استرداد نقدي لمرتجع شراء #${invoice.invoiceNumber}", createdAt
+                    "PURCHASE_RETURN", returnId, "CASH", note?.ifBlank { null } ?: "استرداد نقدي لمرتجع شراء #${invoice.invoiceNumber}", createdAt,
+                    createdByUserId = actorId, createdByUserName = actorName
                 )
             )
         }
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "RETURN",
+            description = "مرتجع شراء على فاتورة #${invoice.invoiceNumber}",
+            sourceType = "PURCHASE_RETURN",
+            sourceId = returnId,
+            lines = buildList {
+                if (cashReceived > 0L) add(JournalLineInput(ChartAccounts.CODE_CASH, ChartAccounts.NAME_CASH, cashReceived, 0L, note))
+                if (debtReduction > 0L) add(JournalLineInput(ChartAccounts.CODE_PAYABLE, ChartAccounts.NAME_PAYABLE, debtReduction, 0L, note))
+                add(JournalLineInput(ChartAccounts.CODE_PURCHASES, ChartAccounts.NAME_PURCHASES, 0L, total, note))
+            },
+            createdAt = createdAt, actorId = actorId, actorName = actorName, notes = note
+        )
         database.references().insertActivity(
             ActivityLogEntity(
                 id = UUID.randomUUID().toString(),
@@ -1390,6 +1794,8 @@ class GroceryRepository(private val database: GroceryDatabase) {
         require(operationId.isNotBlank() && reason.isNotBlank()) { "أدخل سبب إلغاء الفاتورة" }
         val invoice = database.salesInvoices().findById(invoiceId) ?: error("الفاتورة غير موجودة")
         if (invoice.status == "VOIDED") return@withTransaction
+        accounting.requirePeriodOpen(invoice.createdAt)
+        accounting.requirePeriodOpen(createdAt)
         val lines = database.salesInvoices().lines(invoiceId)
         lines.forEach { line ->
             require(database.returns().returnedQuantity(invoiceId, line.id) == 0L) {
@@ -1436,7 +1842,10 @@ class GroceryRepository(private val database: GroceryDatabase) {
                     sourceType = "SALES_INVOICE_VOID",
                     sourceId = invoiceId,
                     note = "عكس فاتورة بيع ملغاة #${invoice.invoiceNumber}: $reason",
-                    createdAt = createdAt
+                    createdAt = createdAt,
+                    balanceBefore = customer.balance,
+                    createdByUserId = actorId,
+                    createdByUserName = actorName
                 )
             )
             check(database.customers().setBalance(customerId, newBalance, createdAt) == 1)
@@ -1452,10 +1861,26 @@ class GroceryRepository(private val database: GroceryDatabase) {
                     sourceId = invoiceId,
                     paymentMethod = invoice.paymentMethod,
                     note = "رد نقدي لإلغاء فاتورة بيع #${invoice.invoiceNumber}: $reason",
-                    createdAt = createdAt
+                    createdAt = createdAt,
+                    createdByUserId = actorId,
+                    createdByUserName = actorName
                 )
             )
         }
+        val (cashCode, cashName) = ChartAccounts.accountForMethod(invoice.paymentMethod)
+        accounting.postAutoJournal(
+            operationId = "journal:$operationId",
+            entryType = "REVERSAL",
+            description = "عكس فاتورة بيع ملغاة #${invoice.invoiceNumber}",
+            sourceType = "SALES_INVOICE_VOID",
+            sourceId = invoiceId,
+            lines = buildList {
+                add(JournalLineInput(ChartAccounts.CODE_SALES, ChartAccounts.NAME_SALES, invoice.total, 0L, reason))
+                if (invoice.paid > 0L) add(JournalLineInput(cashCode, cashName, 0L, invoice.paid, reason))
+                if (invoice.remaining > 0L) add(JournalLineInput(ChartAccounts.CODE_RECEIVABLE, ChartAccounts.NAME_RECEIVABLE, 0L, invoice.remaining, reason))
+            },
+            createdAt = createdAt, actorId = actorId, actorName = actorName, notes = reason
+        )
         database.references().insertActivity(
             ActivityLogEntity(
                 id = UUID.randomUUID().toString(),

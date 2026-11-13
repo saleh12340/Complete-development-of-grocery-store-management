@@ -13,7 +13,9 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,7 +85,8 @@ fun DashboardScreen(
             if (isManager) add(NavSectionItem("expenses", "المصروفات", "تسجيل وتعديل المصروفات", Icons.Default.MoneyOff, true))
             if (isManager) add(NavSectionItem("transfers", "الحوالات", "الواردة والصادرة والعمولات", Icons.Default.SwapHoriz, true))
             add(NavSectionItem("notes", "الملاحظات", "تنبيهات المتجر والديون", Icons.AutoMirrored.Filled.NoteAdd))
-            add(NavSectionItem("printer", "الطابعة الحرارية", "إعداد 58mm / 80mm والاختبار", Icons.Default.Print))
+            add(NavSectionItem("journal", "القيود المحاسبية", "القيود المزدوجة وإغلاق الفترات", Icons.Default.MenuBook, true))
+            add(NavSectionItem("print-center", "مركز الطباعة والتقارير", "طباعة وتصدير 17 نوع مستند", Icons.Default.Print))
             if (isManager) add(NavSectionItem("backup", "النسخ الاحتياطي", "تشفير، فحص واستعادة", Icons.Default.CloudUpload, true))
             if (isManager) add(NavSectionItem("users", "المستخدمون", "الصلاحيات والوصول", Icons.Default.AdminPanelSettings, true))
             if (isManager) add(NavSectionItem("audit", "التدقيق والتشخيص", "سجل العمليات والأخطاء", Icons.Default.FactCheck, true))
@@ -127,17 +130,74 @@ fun DashboardScreen(
                             color = colors.onHeaderNavy.copy(alpha = 0.86f)
                         )
                     }
-                    IconButton(
-                        onClick = onLogout,
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .testTag("logout_button")
-                    ) {
-                        Icon(
-                            Icons.Default.Logout,
-                            contentDescription = "تسجيل الخروج",
-                            tint = colors.onHeaderNavy
-                        )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        var showSwitchUser by remember { mutableStateOf(false) }
+                        IconButton(
+                            onClick = { showSwitchUser = true },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("switch_user_button")
+                        ) {
+                            Icon(
+                                Icons.Default.SwitchAccount,
+                                contentDescription = "تبديل المستخدم",
+                                tint = colors.onHeaderNavy
+                            )
+                        }
+                        IconButton(
+                            onClick = onLogout,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("logout_button")
+                        ) {
+                            Icon(
+                                Icons.Default.Logout,
+                                contentDescription = "تسجيل الخروج",
+                                tint = colors.onHeaderNavy
+                            )
+                        }
+
+                        if (showSwitchUser) {
+                            var switchUsername by remember { mutableStateOf("") }
+                            var switchPin by remember { mutableStateOf("") }
+                            var switchError by remember { mutableStateOf("") }
+                            AlertDialog(
+                                onDismissRequest = { showSwitchUser = false },
+                                title = { Text("تبديل المستخدم السريع") },
+                                text = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedTextField(
+                                            value = switchUsername,
+                                            onValueChange = { switchUsername = it },
+                                            label = { Text("اسم المستخدم") },
+                                            singleLine = true
+                                        )
+                                        OutlinedTextField(
+                                            value = switchPin,
+                                            onValueChange = { switchPin = it },
+                                            label = { Text("رمز PIN") },
+                                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
+                                            singleLine = true
+                                        )
+                                        if (switchError.isNotBlank()) {
+                                            Text(switchError, color = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                },
+                                confirmButton = {
+                                    Button(
+                                        enabled = switchUsername.isNotBlank() && switchPin.isNotBlank(),
+                                        onClick = {
+                                            viewModel.switchUser(switchUsername, switchPin) { ok ->
+                                                if (ok) showSwitchUser = false else switchError = "بيانات الدخول غير صحيحة"
+                                            }
+                                        }
+                                    ) { Text("تبديل الحساب") }
+                                },
+                                dismissButton = { TextButton(onClick = { showSwitchUser = false }) { Text("إلغاء") } }
+                            )
+                        }
                     }
                 }
             }

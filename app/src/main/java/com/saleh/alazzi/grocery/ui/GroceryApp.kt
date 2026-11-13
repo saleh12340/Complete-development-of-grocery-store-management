@@ -372,6 +372,32 @@ fun GroceryApp(
                         NotesScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
                     }
 
+                    composable("journal") {
+                        if (isManager) {
+                            JournalEntriesScreen(
+                                viewModel = viewModel,
+                                storeName = storeName,
+                                currency = currency,
+                                savedPrinterAddress = savedPrinterAddress,
+                                savedPrinterName = savedPrinterName,
+                                onBack = { navController.popBackStack() }
+                            )
+                        } else {
+                            AccessDeniedFallback { navController.popBackStack() }
+                        }
+                    }
+
+                    composable("print-center") {
+                        PrintCenterScreen(
+                            viewModel = viewModel,
+                            storeName = storeName,
+                            currency = currency,
+                            savedPrinterAddress = savedPrinterAddress,
+                            savedPrinterName = savedPrinterName,
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
+
                     composable("printer") {
                         PrinterScreen(
                             viewModel = viewModel,
