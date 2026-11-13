@@ -186,7 +186,7 @@ fun InventoryScreen(
                                 Text("حد التنبيه: ${Formatters.formatQty(item.lowStockThresholdMilli)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                TextButton(onClick = { historyItem = item }) {
+                                TextButton(modifier = Modifier.testTag("item_history_button"), onClick = { historyItem = item }) {
                                     Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text("الحركات")
@@ -309,7 +309,7 @@ fun InventoryScreen(
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { historyItem = null }) { Text("إغلاق") } }
+            confirmButton = { TextButton(modifier = Modifier.testTag("close_item_history_button"), onClick = { historyItem = null }) { Text("إغلاق") } }
         )
     }
 
