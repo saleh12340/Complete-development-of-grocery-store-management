@@ -276,6 +276,7 @@ fun InventoryScreen(
     historyItem?.let { item ->
         val movements by viewModel.itemMovements(item.id).collectAsStateWithLifecycle(emptyList())
         AlertDialog(
+            modifier = Modifier.testTag("item_history_dialog"),
             onDismissRequest = { historyItem = null },
             title = { Text("سجل حركات: ${item.name}") },
             text = {
