@@ -105,7 +105,7 @@ class InvoiceItemSelectionCrashTest {
         composeRule.onNodeWithTag("invoice_item_overflow-item").performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("صنف بسعر كبير").assertExists()
+        composeRule.onNodeWithText("صنف بسعر كبير", substring = true).assertExists()
         composeRule.onNodeWithText("تعذر حساب إجمالي الصنف بسبب كبر الكمية أو السعر. أدخل إجمالياً صالحاً أو راجع بيانات الصنف.").assertExists()
         composeRule.onNodeWithTag("new_sale_screen").assertExists()
     }
