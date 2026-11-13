@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -105,8 +104,8 @@ class InvoiceItemSelectionCrashTest {
         composeRule.onNodeWithTag("invoice_item_overflow-item").performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("صنف بسعر كبير", substring = true).assertExists()
-        composeRule.onNodeWithText("تعذر حساب إجمالي الصنف بسبب كبر الكمية أو السعر. أدخل إجمالياً صالحاً أو راجع بيانات الصنف.").assertExists()
-        composeRule.onNodeWithTag("new_sale_screen").assertExists()
+        composeRule.onNodeWithText("صنف بسعر كبير", substring = true).fetchSemanticsNode()
+        composeRule.onNodeWithText("تعذر حساب إجمالي الصنف بسبب كبر الكمية أو السعر. أدخل إجمالياً صالحاً أو راجع بيانات الصنف.").fetchSemanticsNode()
+        composeRule.onNodeWithTag("new_sale_screen").fetchSemanticsNode()
     }
 }
