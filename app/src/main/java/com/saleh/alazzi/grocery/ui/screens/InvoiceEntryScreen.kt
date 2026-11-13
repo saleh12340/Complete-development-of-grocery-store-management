@@ -186,6 +186,7 @@ fun InvoiceEntryScreen(
     var editingIndex by remember { mutableStateOf<Int?>(null) }
     var showItemPicker by remember { mutableStateOf(false) }
     var itemSearchQuery by remember { mutableStateOf("") }
+    var itemSelectionError by remember { mutableStateOf<String?>(null) }
 
     var draftLines by remember { mutableStateOf<List<DraftInvoiceLine>>(emptyList()) }
     var discountInput by remember { mutableStateOf("0") }
@@ -416,7 +417,7 @@ fun InvoiceEntryScreen(
 
                     // 3. اسم الصنف (Item) third
                     OutlinedCard(
-                        onClick = { showItemPicker = true },
+                        onClick = { itemSelectionError = null; showItemPicker = true },
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("line_item_picker_button")
@@ -437,6 +438,10 @@ fun InvoiceEntryScreen(
                             }
                             Icon(Icons.Default.Search, contentDescription = null)
                         }
+                    }
+
+                    itemSelectionError?.let { message ->
+                        Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
 
                     if (derivedUnitPrice != null && parsedQtyMilli != null) {
@@ -664,6 +669,7 @@ fun InvoiceEntryScreen(
 
     if (showItemPicker) {
         AlertDialog(
+            modifier = Modifier.testTag("invoice_item_picker_dialog"),
             onDismissRequest = { showItemPicker = false },
             title = { Text("اختيار صنف") },
             text = {
@@ -687,17 +693,23 @@ fun InvoiceEntryScreen(
                             AlAzziCard(
                                 onClick = {
                                     selectedItem = item
+                                    itemSelectionError = null
                                     val qty = Formatters.parseQuantityMilli(qtyInput) ?: 1000L
                                     if (lineTotalInput.isBlank()) {
                                         val unitPrice = if (isSale) item.salePrice else item.purchasePrice
                                         if (unitPrice > 0) {
-                                            lineTotalInput = MoneyMath.lineTotal(qty, unitPrice).toString()
+                                            // Prevent malformed/extreme values from crashing invoice item selection.
+                                            runCatching { MoneyMath.lineTotal(qty, unitPrice) }
+                                                .onSuccess { lineTotalInput = it.toString() }
+                                                .onFailure {
+                                                    itemSelectionError = "تعذر حساب إجمالي الصنف بسبب كبر الكمية أو السعر. أدخل إجمالياً صالحاً أو راجع بيانات الصنف."
+                                                }
                                         }
                                     }
                                     showItemPicker = false
                                     itemSearchQuery = ""
                                 },
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.fillMaxWidth().testTag("invoice_item_${item.id}")
                             ) {
                                 Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Column(modifier = Modifier.weight(1f)) {
