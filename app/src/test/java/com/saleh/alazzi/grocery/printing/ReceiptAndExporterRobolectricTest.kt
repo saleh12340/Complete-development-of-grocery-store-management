@@ -132,7 +132,7 @@ class ReceiptAndExporterRobolectricTest {
         assertEquals(0xBB.toByte(), bytes[1])
         assertEquals(0xBF.toByte(), bytes[2])
         val text = String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
-        assertTrue(text.contains("البند,القيمة,ملاحظة"))
+        assertTrue(text.contains("\"البند\",\"القيمة\",\"ملاحظة\""))
         assertTrue(text.contains("\"تقرير \"\"اليوم\"\", معتمد\""))
     }
 }
