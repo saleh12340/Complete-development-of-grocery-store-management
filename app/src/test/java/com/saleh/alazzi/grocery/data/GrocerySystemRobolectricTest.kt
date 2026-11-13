@@ -143,7 +143,7 @@ class GrocerySystemRobolectricTest {
         helper.writableDatabase.close()
 
         val migratedDb = Room.databaseBuilder(context, GroceryDatabase::class.java, dbName)
-            .addMigrations(GroceryDatabase.MIGRATION_1_2)
+            .addMigrations(GroceryDatabase.MIGRATION_1_2, GroceryDatabase.MIGRATION_2_3)
             .allowMainThreadQueries()
             .build()
         try {
@@ -285,7 +285,7 @@ class GrocerySystemRobolectricTest {
         assertTrue(exportRes.recordCount >= 5)
 
         val inspection = manager.inspectBackup(uri, pass)
-        assertEquals(2, inspection.formatVersion)
+        assertEquals(GroceryBackupManager.FORMAT_VERSION, inspection.formatVersion)
         assertTrue(inspection.relationsValid)
         assertEquals(1, inspection.salesInvoicesCount)
 
