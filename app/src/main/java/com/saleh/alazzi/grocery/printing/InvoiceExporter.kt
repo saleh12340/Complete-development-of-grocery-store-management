@@ -98,6 +98,48 @@ class InvoiceExporter(private val context: Context) {
         }
     }
 
+    fun saveCsv(fileName: String, rows: List<List<String>>): Uri {
+        val csvBody = buildString {
+            append('\uFEFF')
+            rows.forEach { cols ->
+                append(
+                    cols.joinToString(",") { cell ->
+                        val escaped = cell.replace("\"", "\"\"")
+                        "\"$escaped\""
+                    }
+                )
+                append('\n')
+            }
+        }
+        val bytes = csvBody.toByteArray(Charsets.UTF_8)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, safeName(fileName, "csv"))
+                put(MediaStore.Downloads.MIME_TYPE, "text/csv")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOCUMENTS + "/AlAzzi")
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("تعذر إنشاء ملف CSV")
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                    ?: error("تعذر فتح ملف CSV")
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                context.contentResolver.update(uri, values, null, null)
+                uri
+            } catch (error: Throwable) {
+                context.contentResolver.delete(uri, null, null)
+                throw error
+            }
+        } else {
+            val directory = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "AlAzzi").apply { mkdirs() }
+            val file = File(directory, safeName(fileName, "csv"))
+            FileOutputStream(file).use { it.write(bytes) }
+            FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+        }
+    }
+
     fun share(uri: Uri, mimeType: String, chooserTitle: String = "مشاركة المستند") {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = mimeType

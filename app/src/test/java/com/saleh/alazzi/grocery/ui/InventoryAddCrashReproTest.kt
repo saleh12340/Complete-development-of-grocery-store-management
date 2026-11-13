@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -87,22 +88,33 @@ class InventoryAddCrashReproTest {
         }
         composeRule.waitForIdle()
 
-        // Login
+        // Login (PBKDF2 runs asynchronously in viewModelScope)
         composeRule.onNodeWithTag("login_username_input").performTextReplacement("admin")
         composeRule.onNodeWithTag("login_pin_input").performTextReplacement("123456")
         composeRule.onNodeWithTag("login_button").performClick()
-        composeRule.waitForIdle()
+        composeRule.waitUntil(timeoutMillis = 15_000) {
+            composeRule.onAllNodesWithTag("nav_tab_inventory").fetchSemanticsNodes().isNotEmpty() ||
+                composeRule.onAllNodesWithTag("rail_tab_inventory").fetchSemanticsNodes().isNotEmpty()
+        }
 
         // Navigate to Inventory tab
-        composeRule.onNodeWithTag("nav_tab_inventory").performClick()
-        composeRule.waitForIdle()
+        if (composeRule.onAllNodesWithTag("nav_tab_inventory").fetchSemanticsNodes().isNotEmpty()) {
+            composeRule.onNodeWithTag("nav_tab_inventory").performClick()
+        } else {
+            composeRule.onNodeWithTag("rail_tab_inventory").performClick()
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("صنف جديد").fetchSemanticsNodes().isNotEmpty()
+        }
 
         // Open Categories/Units dialog and add one
         composeRule.onNodeWithContentDescription("التصنيفات والوحدات").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("تصنيف جديد").performTextInput("مشروبات")
         composeRule.onAllNodesWithText("إضافة")[0].performClick()
-        composeRule.waitForIdle()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            runBlocking { db.references().readCategoriesSync().any { it.name == "مشروبات" } }
+        }
         composeRule.onNodeWithText("إغلاق").performClick()
         composeRule.waitForIdle()
 
@@ -116,6 +128,9 @@ class InventoryAddCrashReproTest {
         composeRule.onNodeWithText("مشروبات").performScrollTo().performClick()
         composeRule.onNodeWithText("كيلو").performScrollTo().performClick()
         composeRule.onNodeWithTag("save_item_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithTag("save_item_button").fetchSemanticsNodes().isEmpty()
+        }
         composeRule.waitForIdle()
 
         val items = runBlocking { db.items().readAllSync() }
@@ -133,6 +148,9 @@ class InventoryAddCrashReproTest {
         composeRule.onNodeWithTag("item_buy_input").performTextReplacement("1000000000000")
         composeRule.onNodeWithTag("item_sell_input").performTextReplacement("1200000000000")
         composeRule.onNodeWithTag("save_item_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithTag("save_item_button").fetchSemanticsNodes().isEmpty()
+        }
         composeRule.waitForIdle()
 
         // Open movements dialog on first item
@@ -146,12 +164,18 @@ class InventoryAddCrashReproTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithText("سبب التسوية (مطلوب)").performTextInput("مطابقة")
         composeRule.onNodeWithText("حفظ التسوية").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithText("حفظ التسوية").fetchSemanticsNodes().isEmpty()
+        }
         composeRule.waitForIdle()
 
         // Open edit dialog
         composeRule.onAllNodesWithText("تعديل")[0].performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("save_item_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithTag("save_item_button").fetchSemanticsNodes().isEmpty()
+        }
         composeRule.waitForIdle()
     }
 }

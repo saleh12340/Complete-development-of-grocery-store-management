@@ -19,7 +19,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.saleh.alazzi.grocery.domain.money.MoneyMath
 import com.saleh.alazzi.grocery.printing.InvoiceExporter
 import com.saleh.alazzi.grocery.printing.ReceiptRenderer
 import com.saleh.alazzi.grocery.printing.ReportLine
@@ -28,6 +27,7 @@ import com.saleh.alazzi.grocery.ui.ReportPeriod
 import com.saleh.alazzi.grocery.ui.UserRoles
 import com.saleh.alazzi.grocery.ui.components.*
 import com.saleh.alazzi.grocery.ui.theme.LocalAlAzziColors
+import java.math.BigInteger
 import java.util.Calendar
 import java.util.UUID
 
@@ -219,8 +219,20 @@ fun ReportsScreen(
     val netOperatingProfit = grossTradingProfit - summary.expenses
     val customerDebts = remember(customers) { customers.filter { !it.isArchived }.sumOf { it.balance } }
     val supplierDues = remember(suppliers) { suppliers.filter { !it.isArchived }.sumOf { it.balance } }
-    val inventoryCostValue = remember(items) { items.filter { it.isActive && it.quantityMilli > 0 }.sumOf { MoneyMath.lineTotal(it.quantityMilli, it.purchasePrice) } }
-    val inventoryRetailValue = remember(items) { items.filter { it.isActive && it.quantityMilli > 0 }.sumOf { MoneyMath.lineTotal(it.quantityMilli, it.salePrice) } }
+    val thousand = remember { BigInteger.valueOf(1_000L) }
+    val halfThousand = remember { BigInteger.valueOf(500L) }
+    val inventoryCostValue = remember(items) {
+        items.filter { it.isActive && it.quantityMilli > 0 && it.purchasePrice >= 0 }
+            .fold(BigInteger.ZERO) { acc, item ->
+                acc.add(BigInteger.valueOf(item.quantityMilli).multiply(BigInteger.valueOf(item.purchasePrice)).add(halfThousand).divide(thousand))
+            }
+    }
+    val inventoryRetailValue = remember(items) {
+        items.filter { it.isActive && it.quantityMilli > 0 && it.salePrice >= 0 }
+            .fold(BigInteger.ZERO) { acc, item ->
+                acc.add(BigInteger.valueOf(item.quantityMilli).multiply(BigInteger.valueOf(item.salePrice)).add(halfThousand).divide(thousand))
+            }
+    }
     val lowStockCount = remember(items) { items.count { it.isActive && it.quantityMilli <= it.lowStockThresholdMilli } }
     val averageInvoice = if (summary.salesCount > 0) summary.sales / summary.salesCount else 0L
 
@@ -268,7 +280,7 @@ fun ReportsScreen(
             ReportLine("17. مدفوعات الموردين", Formatters.formatMoney(summary.supplierPayments, currency)),
             ReportLine("18. إجمالي ذمم العملاء", Formatters.formatMoney(customerDebts, currency)),
             ReportLine("19. إجمالي مستحقات الموردين", Formatters.formatMoney(supplierDues, currency)),
-            ReportLine("20. قيمة المخزون (تكلفة / بيع)", "${Formatters.formatMoney(inventoryCostValue, currency)} / ${Formatters.formatMoney(inventoryRetailValue, currency)}")
+            ReportLine("20. قيمة المخزون (تكلفة / بيع)", "${Formatters.formatBigMoney(inventoryCostValue, currency)} / ${Formatters.formatBigMoney(inventoryRetailValue, currency)}")
         )
     }
 
@@ -344,7 +356,7 @@ fun ReportsScreen(
         when (selectedTab) {
             0 -> {
                 item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(onClick = {
                             runCatching {
                                 val bmp = ReceiptRenderer.renderReport(storeName, "التقرير المالي الشامل", "الفترة: ${period.label}", all20Metrics)
@@ -355,7 +367,19 @@ fun ReportsScreen(
                         }, modifier = Modifier.weight(1f)) {
                             Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("تصدير PDF")
+                            Text("PDF")
+                        }
+                        OutlinedButton(onClick = {
+                            runCatching {
+                                val rows = listOf(listOf("المؤشر", "القيمة")) + all20Metrics.map { listOf(it.label, it.value) }
+                                val uri = exporter.saveCsv("AlAzzi_Report_${period.name}", rows)
+                                exporter.share(uri, "text/csv", "مشاركة التقرير CSV")
+                            }.onSuccess { exportStatus = "تم تصدير التقرير CSV" }
+                                .onFailure { exportStatus = it.message ?: "تعذر تصدير CSV" }
+                        }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.TableChart, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("CSV")
                         }
                         OutlinedButton(onClick = {
                             runCatching {
@@ -367,7 +391,7 @@ fun ReportsScreen(
                         }, modifier = Modifier.weight(1f)) {
                             Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("مشاركة صورة")
+                            Text("صورة")
                         }
                     }
                     if (exportStatus.isNotBlank()) {

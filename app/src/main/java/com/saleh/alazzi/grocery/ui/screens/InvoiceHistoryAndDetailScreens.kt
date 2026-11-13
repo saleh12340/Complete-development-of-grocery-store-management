@@ -611,19 +611,26 @@ private fun PartialReturnDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 360.dp)) {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f, fill = false)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
                     items(items, key = { it.first }) { (lineId, name, origQty) ->
                         OutlinedTextField(
                             value = qtyMap[lineId].orEmpty(),
                             onValueChange = { qtyMap[lineId] = Formatters.filterDecimalInput(it) },
                             label = { Text("$name (الأصلي: $origQty)") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            singleLine = true
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
-                OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("سبب المرتجع") }, singleLine = true)
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("سبب المرتجع") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {

@@ -34,7 +34,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.5.0'
+          gradle-version: '9.3.1'
+
+      - name: Verify Room v2 schema export
+        run: test -f app/schemas/com.saleh.alazzi.grocery.data.local.GroceryDatabase/2.json
 
       - name: Run unit tests
         run: gradle testDebugUnitTest
@@ -45,19 +48,20 @@ jobs:
       - name: Build optimized release APK
         run: gradle assembleRelease
 
-      - name: Report optimized APK size and SHA-256
+      - name: Package named release APK and report size + SHA-256
         run: |
-          stat -c 'APK_SIZE_BYTES=%s' app/build/outputs/apk/release/app-release.apk
-          ls -lh app/build/outputs/apk/release/app-release.apk
-          sha256sum app/build/outputs/apk/release/app-release.apk | tee app/build/outputs/apk/release/app-release.apk.sha256
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/Al-Azzi-Grocery-Optimized-Release.apk
+          stat -c 'APK_SIZE_BYTES=%s' app/build/outputs/apk/release/Al-Azzi-Grocery-Optimized-Release.apk
+          ls -lh app/build/outputs/apk/release/Al-Azzi-Grocery-Optimized-Release.apk
+          sha256sum app/build/outputs/apk/release/Al-Azzi-Grocery-Optimized-Release.apk | tee app/build/outputs/apk/release/Al-Azzi-Grocery-Optimized-Release.apk.sha256
 
       - name: Upload optimized release APK
         uses: actions/upload-artifact@v5
         with:
-          name: Al-Azzi-Grocery-optimized-release-apk
+          name: Al-Azzi-Grocery-Optimized-Release.apk
           path: |
-            app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/apk/release/app-release.apk.sha256
+            app/build/outputs/apk/release/Al-Azzi-Grocery-Optimized-Release.apk
+            app/build/outputs/apk/release/Al-Azzi-Grocery-Optimized-Release.apk.sha256
           if-no-files-found: error
           retention-days: 14
 

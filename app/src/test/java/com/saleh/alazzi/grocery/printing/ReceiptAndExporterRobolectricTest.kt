@@ -114,4 +114,26 @@ class ReceiptAndExporterRobolectricTest {
             EscPosRasterEncoder.encode(unaligned)
         }
     }
+
+    @Test
+    fun exportsUtf8BomCsvWithProperEscaping() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val exporter = InvoiceExporter(context)
+        val uri = exporter.saveCsv(
+            fileName = "financial_report_test",
+            rows = listOf(
+                listOf("البند", "القيمة", "ملاحظة"),
+                listOf("صافي المبيعات", "125000", "تقرير \"اليوم\", معتمد")
+            )
+        )
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: error("CSV output stream was null")
+        assertTrue(bytes.size >= 3)
+        assertEquals(0xEF.toByte(), bytes[0])
+        assertEquals(0xBB.toByte(), bytes[1])
+        assertEquals(0xBF.toByte(), bytes[2])
+        val text = String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+        assertTrue(text.contains("البند,القيمة,ملاحظة"))
+        assertTrue(text.contains("\"تقرير \"\"اليوم\"\", معتمد\""))
+    }
 }
