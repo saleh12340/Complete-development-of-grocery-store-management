@@ -1,0 +1,6 @@
+{
+  "name": "بقالة العزي للمواد الغذائية",
+  "description": "Professional Grocery Store and Accounting Management System for Al Azzi Grocery",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
