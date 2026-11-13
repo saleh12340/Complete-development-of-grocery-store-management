@@ -19,6 +19,7 @@ import com.saleh.alazzi.grocery.security.SessionManager
 import com.saleh.alazzi.grocery.security.UserPermissions
 import com.saleh.alazzi.grocery.security.hasPermission
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -138,7 +139,7 @@ class GroceryViewModel(
     init {
         if (sessionManager != null) {
             viewModelScope.launch {
-                runCatching {
+                try {
                     val persisted = sessionManager.loadValidSession()
                     if (persisted != null) {
                         val user = database.references().findUserById(persisted.userId)
@@ -149,8 +150,17 @@ class GroceryViewModel(
                             sessionManager.clearSession()
                         }
                     }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    // Keep startup recoverable; never let a corrupt/unavailable session crash app launch.
+                    logError("RestoreSession", error)
+                    _session.value = null
+                    _restoredRoute.value = "dashboard"
+                    eventChannel.send("تعذر استعادة الجلسة السابقة. يرجى تسجيل الدخول مجدداً.")
+                } finally {
+                    _sessionInitialized.value = true
                 }
-                _sessionInitialized.value = true
             }
         }
     }
@@ -1056,33 +1066,49 @@ class GroceryViewModel(
 
     fun login(username: String, pin: String) {
         viewModelScope.launch {
-            val user = database.references().findUser(username.trim())
-            val valid = user != null && user.isActive &&
-                PinHasher.verify(pin.toCharArray(), PinCredential(user.pinSalt, user.pinHash))
-            if (valid) {
-                _session.value = user
-                _restoredRoute.value = "dashboard"
-                sessionManager?.saveSession(user, "dashboard", configuredTimeoutHours())
-                eventChannel.send("مرحباً ${user.displayName}")
-            } else {
-                eventChannel.send("اسم المستخدم أو PIN غير صحيح")
+            try {
+                val user = database.references().findUser(username.trim())
+                val valid = user != null && user.isActive &&
+                    PinHasher.verify(pin.toCharArray(), PinCredential(user.pinSalt, user.pinHash))
+                if (valid) {
+                    // Persist first so a storage/Keystore failure cannot leave a half-authenticated UI.
+                    sessionManager?.saveSession(user, "dashboard", configuredTimeoutHours())
+                    _session.value = user
+                    _restoredRoute.value = "dashboard"
+                    eventChannel.send("مرحباً ${user.displayName}")
+                } else {
+                    eventChannel.send("اسم المستخدم أو PIN غير صحيح")
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                logError("Login", error)
+                eventChannel.send(messageFor(error, "تعذر تسجيل الدخول. تحقق من قاعدة البيانات وحاول مجدداً."))
             }
         }
     }
 
     fun switchUser(username: String, pin: String, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val user = database.references().findUser(username.trim())
-            val valid = user != null && user.isActive &&
-                PinHasher.verify(pin.toCharArray(), PinCredential(user.pinSalt, user.pinHash))
-            if (valid) {
-                _session.value = user
-                _restoredRoute.value = "dashboard"
-                sessionManager?.saveSession(user, "dashboard", configuredTimeoutHours())
-                eventChannel.send("تم تبديل الحساب إلى ${user.displayName}")
-                onResult(true)
-            } else {
-                eventChannel.send("بيانات التحقق للحساب الجديد غير صحيحة")
+            try {
+                val user = database.references().findUser(username.trim())
+                val valid = user != null && user.isActive &&
+                    PinHasher.verify(pin.toCharArray(), PinCredential(user.pinSalt, user.pinHash))
+                if (valid) {
+                    sessionManager?.saveSession(user, "dashboard", configuredTimeoutHours())
+                    _session.value = user
+                    _restoredRoute.value = "dashboard"
+                    eventChannel.send("تم تبديل الحساب إلى ${user.displayName}")
+                    onResult(true)
+                } else {
+                    eventChannel.send("بيانات التحقق للحساب الجديد غير صحيحة")
+                    onResult(false)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                logError("SwitchUser", error)
+                eventChannel.send(messageFor(error, "تعذر تبديل الحساب. حاول مجدداً."))
                 onResult(false)
             }
         }
